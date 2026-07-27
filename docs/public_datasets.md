@@ -18,12 +18,12 @@ resumable without fetching completed archives again. A filtered Adobe archive
 is marked complete only after the downloader verifies that every eligible
 annotation has a corresponding extracted image.
 
-After successful normalization, the P2 pipeline verifies every normalized
-image and curve mask before deleting the raw Adobe files:
+The generic conversion utility writes independent instance masks and JSONL
+manifests. These files can later be adapted to the dataset format required by
+the selected training framework:
 
 ```powershell
-python -m training.run_p2_pipeline
+python -m training.convert_public_instances --help
 ```
 
-Use `--no-prune-adobe-raw` to retain the Adobe sources for debugging. Raw
-LineEX and UB-PMC sources are not removed by this cleanup policy.
+Raw public datasets are not removed automatically by the converter.

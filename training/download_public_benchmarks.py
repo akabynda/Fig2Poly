@@ -13,7 +13,7 @@ import zipfile
 
 import requests
 
-from training.convert_public_curvequery import eligible_chartinfo_stems
+from training.convert_public_instances import eligible_chartinfo_stems
 
 @dataclass(frozen=True)
 class Asset:

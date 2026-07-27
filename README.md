@@ -91,19 +91,6 @@ dataset/
 Тестовый real-набор должен быть полностью отделён: синтетический test измеряет корректность пайплайна,
 но не реальную обобщающую способность.
 
-## Mask2Former baseline
-
-Для обучения instance segmentation на независимых PNG-масках:
-
-```powershell
-pip install -r requirements-train.txt
-python -m training.mask2former train --dataset dataset --output runs/mask2former
-python -m training.mask2former evaluate --model runs/mask2former/final --dataset dataset --split test
-```
-
-Pipeline напрямую передаёт в Mask2Former тензор `(N, H, W)`, поэтому пересекающиеся и несвязные
-маски кривых не теряются при конвертации в polygon или единую ID-карту.
-
 ## YOLO26 baseline
 
 ```powershell
@@ -113,6 +100,14 @@ python -m training.train_yolo --data dataset/curve_yolo.yaml --epochs 30
 # Продолжить прерванное обучение с последней завершённой эпохи:
 python -m training.train_yolo --resume runs/yolo26/full_visible_384/weights/last.pt
 ```
+
+## Server experiments
+
+The reproducible Linux workflow for `YOLO26x-seg`, `MaskDINO R50`, and
+`MaskDINO Swin-L` is documented in
+[`server/README.md`](server/README.md). All three models use the same canonical
+train/validation/test manifests. MaskDINO uses exact COCO RLE masks; YOLO uses
+its required polygon representation.
 
 Конвертер объединяет пунктирные компоненты каждой кривой в одну polygon-строку YOLO. Для тонких
 кривых обязательно используются `mask_ratio=1` и `overlap_mask=False`.

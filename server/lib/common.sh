@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${FIG2POLY_ENV:-$SCRIPT_DIR/.env}"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Missing $ENV_FILE. Copy server/.env.example to server/.env and edit paths." >&2
+  exit 2
+fi
+set -a
+source "$ENV_FILE"
+set +a
+
+: "${FIG2POLY_ROOT:?}"
+: "${FIG2POLY_STORAGE:?}"
+: "${DATA_ROOT:?}"
+: "${RUNS_ROOT:?}"
+: "${CACHE_ROOT:?}"
+: "${MASKDINO_ROOT:?}"
+
+mkdir -p "$DATA_ROOT" "$RUNS_ROOT" "$CACHE_ROOT" "$FIG2POLY_STORAGE/logs"
+export PYTHONPATH="$FIG2POLY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export CUDA_VISIBLE_DEVICES="${CUDA_DEVICES:-0}"
+
+record_run_metadata() {
+  local output="$1"
+  mkdir -p "$output"
+  git -C "$FIG2POLY_ROOT" rev-parse HEAD > "$output/fig2poly_git_sha.txt"
+  nvidia-smi > "$output/nvidia_smi.txt"
+}

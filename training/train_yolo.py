@@ -8,16 +8,19 @@ from ultralytics import YOLO
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train YOLO26 instance segmentation on CurveForge")
-    parser.add_argument("--model", default="yolo26n-seg.pt")
+    parser.add_argument("--model", default="yolo26x-seg.pt")
     parser.add_argument("--data", default="dataset/curve_yolo.yaml")
     parser.add_argument("--project", default="runs/yolo26")
-    parser.add_argument("--name", default="pilot")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--batch", type=int, default=4)
-    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--name", default="yolo26x_seg")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--imgsz", type=int, default=1024)
+    parser.add_argument("--batch", type=int, default=-1)
+    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="0")
-    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--patience", type=int, default=40)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-det", type=int, default=100)
+    parser.add_argument("--mosaic", type=float, default=0.0)
     parser.add_argument("--fraction", type=float, default=1.0)
     parser.add_argument("--resume", type=Path,
                         help="Resume from a last.pt checkpoint, including optimizer and epoch state")
@@ -35,10 +38,12 @@ def main(argv: list[str] | None = None) -> int:
         batch=args.batch, workers=args.workers, device=args.device,
         project=str(Path(args.project).resolve()), name=args.name,
         plots=True, amp=True, mask_ratio=1, overlap_mask=False,
-        cos_lr=True, close_mosaic=max(1, args.epochs // 5),
+        cos_lr=True, mosaic=args.mosaic,
+        close_mosaic=max(1, args.epochs // 5) if args.mosaic else 0,
         patience=args.patience, exist_ok=True,
         fraction=args.fraction,
         save=True, save_period=1,
+        seed=args.seed, deterministic=True, max_det=args.max_det,
     )
     return 0
 

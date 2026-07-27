@@ -1,0 +1,4 @@
+ultralytics==8.4.104
+opencv-python-headless>=4.10
+ijson>=3.5
+requests>=2.32

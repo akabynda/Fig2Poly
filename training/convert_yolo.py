@@ -10,6 +10,8 @@ import numpy as np
 from PIL import Image
 from ultralytics.data.converter import merge_multi_segment
 
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
 
 def mask_to_polygon(path: Path, epsilon: float = 0.75, dilate: int = 0) -> np.ndarray | None:
     mask = np.asarray(Image.open(path).convert("L"))
@@ -36,11 +38,11 @@ def mask_to_polygon(path: Path, epsilon: float = 0.75, dilate: int = 0) -> np.nd
     return polygon if len(polygon) >= 3 else None
 
 
-def convert_one(job: tuple[str, str, str, float, int]) -> dict:
-    root_raw, split, stem, epsilon, dilate = job
+def convert_one(job: tuple[str, str, str, str, float, int]) -> dict:
+    root_raw, split, stem, image_relative, epsilon, dilate = job
     root = Path(root_raw)
     mask_dir = root / "curve_masks" / split / stem
-    image_path = root / "images" / split / f"{stem}.jpg"
+    image_path = root / image_relative
     with Image.open(image_path) as image:
         width, height = image.size
     lines = []
@@ -62,7 +64,11 @@ def convert_one(job: tuple[str, str, str, float, int]) -> dict:
 
 def write_lists(root: Path, subset_train: int, subset_val: int) -> None:
     for split, limit in (("train", subset_train), ("val", subset_val), ("test", 0)):
-        images = sorted((root / "images" / split).glob("*.jpg"))
+        images = sorted(
+            path
+            for path in (root / "images" / split).iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        )
         all_payload = "\n".join(path.resolve().as_posix() for path in images) + "\n"
         (root / f"yolo_{split}.txt").write_text(all_payload, encoding="utf-8")
         if limit:
@@ -107,8 +113,14 @@ def main(argv: list[str] | None = None) -> int:
     root = args.dataset.resolve()
     jobs = []
     for split in ("train", "val", "test"):
-        for image in sorted((root / "images" / split).glob("*.jpg")):
-            jobs.append((str(root), split, image.stem, args.epsilon, args.dilate))
+        manifest = root / f"{split}.jsonl"
+        with manifest.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                record = json.loads(line)
+                image = root / record["image"]
+                jobs.append(
+                    (str(root), split, image.stem, record["image"], args.epsilon, args.dilate)
+                )
     totals = {"images": 0, "source_instances": 0, "labels": 0, "dropped": 0}
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         for index, result in enumerate(pool.map(convert_one, jobs, chunksize=max(1, len(jobs)//(args.workers*20))), 1):
@@ -121,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     write_lists(root, args.subset_train, args.subset_val)
     write_yamls(root, args.subset_train, args.subset_val)
     totals["dilate_kernel"] = args.dilate
+    totals["representation_warning"] = (
+        "YOLO polygons cannot exactly encode disconnected masks; separated components "
+        "are connected by merge_multi_segment."
+    )
     (root / "yolo_conversion.json").write_text(json.dumps(totals, indent=2), encoding="utf-8")
     print(json.dumps(totals, indent=2))
     return 0

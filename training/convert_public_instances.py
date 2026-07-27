@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Convert official chart benchmarks to CurveForge manifests")
     parser.add_argument("--format", choices=("chartinfo", "lineex"), default="chartinfo")
     parser.add_argument("--raw-root", required=True)
-    parser.add_argument("--output", default="datasets/public_curvequery")
+    parser.add_argument("--output", default="datasets/public_instances")
     parser.add_argument("--dataset-name", required=True)
     parser.add_argument("--official-split", choices=("train", "val", "test"), required=True)
     parser.add_argument("--validation-fraction", type=float, default=0.0)

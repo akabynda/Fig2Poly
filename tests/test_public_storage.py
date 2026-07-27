@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tarfile
 
-from training.convert_public_curvequery import eligible_chartinfo_stems
+from training.convert_public_instances import eligible_chartinfo_stems
 from training.download_public_benchmarks import safe_extract
 
 
