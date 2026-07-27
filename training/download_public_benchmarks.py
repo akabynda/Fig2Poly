@@ -8,10 +8,12 @@ import os
 from pathlib import Path
 import tarfile
 import time
+from typing import Callable
 import zipfile
 
 import requests
 
+from training.convert_public_curvequery import eligible_chartinfo_stems
 
 @dataclass(frozen=True)
 class Asset:
@@ -68,6 +70,23 @@ def log(path: Path, message: str) -> None:
         stream.write(line + "\n")
 
 
+def write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(temporary, path)
+
+
+def extraction_policy(asset: Asset, extract: bool) -> str:
+    if not extract:
+        return "download-only-v1"
+    if asset.dataset == "adobe_synth19" and asset.filename.startswith("images_"):
+        return "adobe-eligible-line-images-v2"
+    return "full-extract-v1"
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -117,11 +136,40 @@ def download(asset: Asset, destination: Path, log_path: Path) -> Path:
     return destination
 
 
-def safe_extract(archive: Path, output: Path) -> None:
+def adobe_line_image_members(annotation_root: Path) -> set[str]:
+    """Return image basenames used by line-chart annotations only."""
+    if not annotation_root.is_dir():
+        raise RuntimeError(
+            f"Adobe annotations must be extracted before image archives: {annotation_root}"
+        )
+    selected = eligible_chartinfo_stems(annotation_root)
+    if not selected:
+        raise RuntimeError(f"No Adobe line-chart annotations found in {annotation_root}")
+    return selected
+
+
+def safe_extract(
+    archive: Path,
+    output: Path,
+    include_member: Callable[[str], bool] | None = None,
+) -> tuple[int, int]:
+    """Safely extract an archive and return (extracted files, skipped files)."""
     output.mkdir(parents=True, exist_ok=True)
+    extracted = 0
+    skipped = 0
     if archive.name.endswith(".tar.gz"):
         with tarfile.open(archive, "r:gz") as stream:
-            stream.extractall(output, filter="data")
+            base = output.resolve()
+            for member in stream:
+                target = (base / member.name).resolve()
+                if base != target and base not in target.parents:
+                    raise RuntimeError(f"Unsafe archive member: {member.name}")
+                if member.isfile() and include_member is not None and not include_member(member.name):
+                    skipped += 1
+                    continue
+                stream.extract(member, output, filter="data")
+                if member.isfile():
+                    extracted += 1
     elif archive.suffix.lower() == ".zip":
         with zipfile.ZipFile(archive) as stream:
             base = output.resolve()
@@ -129,9 +177,15 @@ def safe_extract(archive: Path, output: Path) -> None:
                 target = (base / member.filename).resolve()
                 if base != target and base not in target.parents:
                     raise RuntimeError(f"Unsafe archive member: {member.filename}")
-            stream.extractall(output)
+                if not member.is_dir() and include_member is not None and not include_member(member.filename):
+                    skipped += 1
+                    continue
+                stream.extract(member, output)
+                if not member.is_dir():
+                    extracted += 1
     else:
         raise ValueError(f"Unsupported archive: {archive}")
+    return extracted, skipped
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -148,29 +202,79 @@ def main(argv: list[str] | None = None) -> int:
     selected = {item.strip() for item in args.datasets.split(",") if item.strip()}
     assets = [asset for asset in ASSETS if asset.dataset in selected]
     manifest = {"started": time.time(), "assets": []}
+    adobe_line_stems: set[str] | None = None
+    pending_adobe_image_receipts: list[tuple[Path, dict]] = []
     for asset in assets:
+        policy = extraction_policy(asset, args.extract)
+        receipt_path = (
+            root / "_state" / asset.dataset / f"{asset.filename}.json"
+        )
+        if receipt_path.is_file():
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if (
+                receipt.get("url") == asset.url
+                and receipt.get("size") == asset.size
+                and receipt.get("policy") == policy
+                and receipt.get("completed")
+            ):
+                manifest["assets"].append(receipt)
+                log(log_path, f"reuse completed {asset.dataset}/{asset.filename}")
+                continue
         archive = root / "_archives" / asset.dataset / asset.filename
         log(log_path, f"start {asset.dataset}/{asset.filename}")
         downloaded = download(asset, archive, log_path)
         digest = sha256(downloaded)
         entry = {**asdict(asset), "sha256": digest, "archive": str(downloaded)}
+        entry["policy"] = policy
         if args.extract:
             extract_root = root / "raw" / asset.dataset
-            safe_extract(downloaded, extract_root)
+            include_member = None
+            if asset.dataset == "adobe_synth19" and asset.filename.startswith("images_"):
+                if adobe_line_stems is None:
+                    adobe_line_stems = adobe_line_image_members(extract_root / "json_gt")
+
+                def include_member(name: str) -> bool:
+                    path = Path(name)
+                    return path.suffix.lower() in {".png", ".jpg", ".jpeg"} and path.stem in adobe_line_stems
+
+            extracted, skipped = safe_extract(downloaded, extract_root, include_member)
             entry["extracted_to"] = str(extract_root)
+            entry["extracted_files"] = extracted
+            entry["skipped_files"] = skipped
+            if include_member is not None:
+                entry["extraction_filter"] = "Adobe line/scatter-line charts with Task 6 curves"
             if args.delete_archives:
                 downloaded.unlink()
                 entry["archive_deleted_after_extract"] = True
+        entry["completed"] = time.time()
+        if asset.dataset == "adobe_synth19" and asset.filename.startswith("images_"):
+            pending_adobe_image_receipts.append((receipt_path, entry))
+        else:
+            write_json_atomic(receipt_path, entry)
         manifest["assets"].append(entry)
         manifest["updated"] = time.time()
-        (root / "download_manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        write_json_atomic(root / "download_manifest.json", manifest)
         log(log_path, f"complete {asset.dataset}/{asset.filename} sha256={digest}")
+    if adobe_line_stems is not None:
+        image_root = root / "raw" / "adobe_synth19" / "images"
+        extracted_stems = {
+            path.stem
+            for path in image_root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            and not path.name.startswith("._")
+        }
+        missing = adobe_line_stems - extracted_stems
+        if missing:
+            examples = ", ".join(sorted(missing)[:5])
+            raise RuntimeError(
+                f"Adobe extraction incomplete: {len(missing)} eligible images missing; "
+                f"examples: {examples}"
+            )
+        for receipt_path, entry in pending_adobe_image_receipts:
+            write_json_atomic(receipt_path, entry)
     manifest["completed"] = time.time()
-    (root / "download_manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_json_atomic(root / "download_manifest.json", manifest)
     return 0
 
 

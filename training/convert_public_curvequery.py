@@ -19,6 +19,27 @@ def stable_validation(name: str, fraction: float) -> bool:
     return value / 2**64 < fraction
 
 
+def normalized_chart_type(annotation: dict) -> str | None:
+    chart_type = ((annotation.get("task1") or {}).get("output") or {}).get("chart_type")
+    if chart_type is None:
+        return None
+    return str(chart_type).strip().lower().replace("_", " ").replace("-", " ")
+
+
+def is_chartinfo_line(annotation: dict) -> bool:
+    chart_type = normalized_chart_type(annotation)
+    return chart_type in (None, "line", "scatter line") and bool(chartinfo_lines(annotation))
+
+
+def eligible_chartinfo_stems(annotation_root: Path) -> set[str]:
+    result = set()
+    for path in annotation_root.rglob("*.json"):
+        annotation = json.loads(path.read_text(encoding="utf-8"))
+        if is_chartinfo_line(annotation):
+            result.add(path.stem)
+    return result
+
+
 def find_chartinfo_pairs(
     raw_root: Path,
     annotation_path_contains: str | None = None,
@@ -42,12 +63,23 @@ def find_chartinfo_pairs(
         ]
     typed_line = [path for path in all_annotations if path.parent.name == "line"]
     annotations = sorted(typed_line or all_annotations)
-    required = {path.stem for path in annotations}
+    eligible_annotations = []
+    for path in annotations:
+        annotation = json.loads(path.read_text(encoding="utf-8"))
+        if is_chartinfo_line(annotation):
+            eligible_annotations.append(path)
+    required = {path.stem for path in eligible_annotations}
     image_index: dict[str, Path] = {}
     for path in raw_root.rglob("*"):
         if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and path.stem in required:
             image_index.setdefault(path.stem, path)
-    pairs = [(annotation, image_index[annotation.stem]) for annotation in annotations if annotation.stem in image_index]
+    missing = required - image_index.keys()
+    if missing:
+        examples = ", ".join(sorted(missing)[:5])
+        raise RuntimeError(
+            f"Missing {len(missing)} eligible line-chart images in {raw_root}; examples: {examples}"
+        )
+    pairs = [(annotation, image_index[annotation.stem]) for annotation in eligible_annotations]
     if not pairs:
         raise RuntimeError(f"No line-chart image/JSON pairs found in {raw_root}")
     return pairs
@@ -211,13 +243,6 @@ def convert_chartinfo(
     counts = {"train": 0, "val": 0, "test": 0, "curves": 0, "skipped": 0}
     for annotation_path, image_path in pairs:
         annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
-        chart_type = ((annotation.get("task1") or {}).get("output") or {}).get("chart_type")
-        normalized_chart_type = (
-            str(chart_type).strip().lower().replace("_", " ").replace("-", " ")
-            if chart_type is not None else None
-        )
-        if normalized_chart_type not in (None, "line", "scatter line"):
-            continue
         lines = chartinfo_lines(annotation)
         if not lines:
             counts["skipped"] += 1

@@ -3,10 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import time
 import traceback
 
-from training.convert_public_curvequery import convert_chartinfo, convert_lineex
+from training.convert_public_curvequery import (
+    convert_chartinfo,
+    convert_lineex,
+    eligible_chartinfo_stems,
+)
 from training.curvequery_mamba import TrainConfig, train
 from training.evaluate_curvequery_mamba import evaluate
 
@@ -35,6 +40,43 @@ def manifest_count(path: Path) -> int:
         return sum(1 for line in stream if line.strip())
 
 
+def verify_normalized_dataset(root: Path) -> int:
+    """Verify every normalized image and curve mask before raw data is pruned."""
+    records = 0
+    for split in ("train", "val", "test"):
+        manifest = root / f"{split}.jsonl"
+        if not manifest.is_file():
+            continue
+        with manifest.open("r", encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                required = [record["image"], *(curve["mask"] for curve in record["curves"])]
+                missing = [relative for relative in required if not (root / relative).is_file()]
+                if missing:
+                    raise RuntimeError(
+                        f"{manifest}:{line_number} references missing files: {missing[:3]}"
+                    )
+                records += 1
+    if records == 0:
+        raise RuntimeError(f"Normalized dataset is empty: {root}")
+    return records
+
+
+def normalized_sample_ids(root: Path) -> set[str]:
+    result = set()
+    for split in ("train", "val", "test"):
+        manifest = root / f"{split}.jsonl"
+        if not manifest.is_file():
+            continue
+        with manifest.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if line.strip():
+                    result.add(str(json.loads(line)["id"]))
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Finish P2 conversion and fine-tuning after background downloads")
     parser.add_argument("--public-root", default="datasets/public")
@@ -44,6 +86,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--lineex-converter-marker",
         default="datasets/public_curvequery/lineex_train_converter.done",
+    )
+    parser.add_argument(
+        "--prune-adobe-raw",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete extracted Adobe sources after verified normalization",
     )
     args = parser.parse_args(argv)
 
@@ -80,6 +128,10 @@ def main(argv: list[str] | None = None) -> int:
         log(log_path, f"LineEX train converted: {json.dumps(result)}")
 
         adobe_root = public_root / "raw" / "adobe_synth19"
+        adobe_train_annotations = adobe_root / "json_gt"
+        adobe_test_annotations = adobe_root / "test_release" / "task6" / "gt_json"
+        expected_adobe_train = eligible_chartinfo_stems(adobe_train_annotations)
+        expected_adobe_test = eligible_chartinfo_stems(adobe_test_annotations)
         log(log_path, "converting AdobeSynth19 official train with deterministic 10% validation")
         result = convert_chartinfo(
             adobe_root,
@@ -89,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             validation_fraction=0.1,
             line_width=3,
             limit=None,
-            annotation_root=adobe_root / "json_gt",
+            annotation_root=adobe_train_annotations,
         )
         log(log_path, f"AdobeSynth19 train converted: {json.dumps(result)}")
 
@@ -104,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             validation_fraction=0.0,
             line_width=3,
             limit=None,
-            annotation_root=adobe_root / "test_release" / "task6" / "gt_json",
+            annotation_root=adobe_test_annotations,
         )
         log(log_path, f"AdobeSynth19 test converted: {json.dumps(result)}")
 
@@ -116,6 +168,30 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(summary, indent=2), encoding="utf-8"
         )
         log(log_path, f"normalized public manifests: {json.dumps(summary)}")
+        if args.prune_adobe_raw:
+            verified = verify_normalized_dataset(normalized)
+            actual_ids = normalized_sample_ids(normalized)
+            expected_ids = {
+                *(f"adobe_synth19__{stem}" for stem in expected_adobe_train),
+                *(f"adobe_synth19_test__{stem}" for stem in expected_adobe_test),
+            }
+            missing_ids = expected_ids - actual_ids
+            if missing_ids:
+                examples = ", ".join(sorted(missing_ids)[:5])
+                raise RuntimeError(
+                    f"Refusing Adobe cleanup: {len(missing_ids)} samples were not normalized; "
+                    f"examples: {examples}"
+                )
+            if adobe_root.is_dir():
+                shutil.rmtree(adobe_root)
+            adobe_archives = public_root / "_archives" / "adobe_synth19"
+            if adobe_archives.is_dir():
+                shutil.rmtree(adobe_archives)
+            log(
+                log_path,
+                f"verified {verified} normalized samples and {len(expected_ids)} Adobe samples; "
+                "removed Adobe raw data and archives",
+            )
 
         synthetic_final = synthetic_run / "final.pt"
         log(log_path, f"waiting for synthetic pretrain: {synthetic_final}")
