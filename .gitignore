@@ -1,0 +1,52 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.env
+.env.*
+!.env.example
+dataset*/
+datasets/
+runs/
+.hf_cache/
+.ultralytics/
+generation*.log
+generation.pid
+dist/
+*.egg-info/
+
+# Model weights and training artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+*.bin
+checkpoints/
+wandb/
+
+# Downloaded archives and temporary files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.part
+*.tmp
+STOP
+STOP_PIPELINE
+*.pid
+*.log
+
+# Local editor/agent and OS state
+.agents/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Nested upstream repositories are downloaded separately.
+third_party/
