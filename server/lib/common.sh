@@ -20,11 +20,21 @@ set +a
 
 mkdir -p "$DATA_ROOT" "$RUNS_ROOT" "$CACHE_ROOT" "$FIG2POLY_STORAGE/logs"
 export PYTHONPATH="$FIG2POLY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export CUDA_VISIBLE_DEVICES="${CUDA_DEVICES:-0}"
+if [[ -n "${CUDA_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+elif [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES=0
+fi
 
 record_run_metadata() {
   local output="$1"
   mkdir -p "$output"
-  git -C "$FIG2POLY_ROOT" rev-parse HEAD > "$output/fig2poly_git_sha.txt"
+  if git -C "$FIG2POLY_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    git -C "$FIG2POLY_ROOT" rev-parse HEAD > "$output/fig2poly_git_sha.txt"
+  elif [[ -f "$FIG2POLY_ROOT/DEPLOYED_COMMIT" ]]; then
+    cp "$FIG2POLY_ROOT/DEPLOYED_COMMIT" "$output/fig2poly_git_sha.txt"
+  else
+    printf 'unknown\n' > "$output/fig2poly_git_sha.txt"
+  fi
   nvidia-smi > "$output/nvidia_smi.txt"
 }

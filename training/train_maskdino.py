@@ -57,6 +57,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--image-size", type=int, default=1024)
     parser.add_argument("--base-lr", type=float)
+    parser.add_argument(
+        "--max-iter",
+        type=int,
+        help="Override the epoch-derived iteration count (used by smoke tests)",
+    )
+    parser.add_argument(
+        "--checkpoint-period",
+        type=int,
+        help="Override checkpoint interval in iterations",
+    )
+    parser.add_argument(
+        "--eval-period",
+        type=int,
+        help="Override validation interval in iterations; 0 disables periodic evaluation",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--eval-split", choices=("val", "test"), default="val")
@@ -75,8 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     from detectron2.engine import launch
 
     steps_per_epoch = math.ceil(image_count(dataset, "train") / args.global_batch)
-    max_iter = max(1, steps_per_epoch * args.epochs)
-    checkpoint_period = max(100, steps_per_epoch // 4)
+    max_iter = args.max_iter or max(1, steps_per_epoch * args.epochs)
+    checkpoint_period = args.checkpoint_period or max(100, steps_per_epoch // 4)
+    eval_period = steps_per_epoch if args.eval_period is None else args.eval_period
     learning_rate = args.base_lr or 1e-4 * args.global_batch / 16
     opts = [
         "MODEL.WEIGHTS", str(args.weights.resolve()),
@@ -90,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         "SOLVER.MAX_ITER", str(max_iter),
         "SOLVER.STEPS", f"({int(max_iter * .89)}, {int(max_iter * .96)})",
         "SOLVER.CHECKPOINT_PERIOD", str(checkpoint_period),
-        "TEST.EVAL_PERIOD", str(steps_per_epoch),
+        "TEST.EVAL_PERIOD", str(eval_period),
         "INPUT.IMAGE_SIZE", str(args.image_size),
         "INPUT.MIN_SCALE", "0.5",
         "INPUT.MAX_SCALE", "1.5",
@@ -111,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                 "steps_per_epoch": steps_per_epoch,
                 "max_iter": max_iter,
                 "checkpoint_period": checkpoint_period,
+                "eval_period": eval_period,
                 "global_batch": args.global_batch,
                 "base_lr": learning_rate,
                 "resume": args.resume,
