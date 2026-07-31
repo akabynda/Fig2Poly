@@ -21,7 +21,7 @@ OUTPUT="$RUNS_ROOT/maskdino_r50_smoke_empty_${SLURM_JOB_ID}"
   --variant r50 \
   --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
   --epochs 1 \
-  --global-batch 1 \
+  --global-batch 2 \
   --num-gpus 1 \
   --workers 0 \
   --max-iter 2 \

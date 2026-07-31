@@ -37,25 +37,42 @@ def main(argv: list[str] | None = None) -> int:
     if empty is None:
         parser.error("no empty training image found; empty-target smoke test is impossible")
 
-    source_image = source / "images" / "train" / empty["file_name"]
-    target_image = output / "images" / "train" / empty["file_name"]
-    link_or_copy(source_image, target_image)
+    nonempty = next(
+        (item for item in train["images"] if int(item["id"]) in annotated_ids),
+        None,
+    )
+    if nonempty is None:
+        parser.error("no annotated training image found; RLE smoke test is impossible")
+    selected_ids = {int(empty["id"]), int(nonempty["id"])}
+    selected_annotations = [
+        item for item in train["annotations"] if int(item["image_id"]) in selected_ids
+    ]
     payload = {
-        "info": {"description": "MaskDINO empty-target smoke test"},
+        "info": {"description": "MaskDINO empty-target and RLE smoke test"},
         "licenses": train.get("licenses", []),
         "categories": train["categories"],
-        "images": [empty],
-        "annotations": [],
+        "images": [empty, nonempty],
+        "annotations": selected_annotations,
     }
     annotations = output / "annotations"
     annotations.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
-        split_image = output / "images" / split / empty["file_name"]
-        link_or_copy(source_image, split_image)
+        for image in (empty, nonempty):
+            source_image = source / "images" / "train" / image["file_name"]
+            split_image = output / "images" / split / image["file_name"]
+            link_or_copy(source_image, split_image)
         (annotations / f"instances_{split}.json").write_text(
             json.dumps(payload), encoding="utf-8"
         )
-    print(json.dumps({"empty_image_id": empty["id"], "file_name": empty["file_name"]}))
+    print(
+        json.dumps(
+            {
+                "empty_image_id": empty["id"],
+                "nonempty_image_id": nonempty["id"],
+                "instances": len(selected_annotations),
+            }
+        )
+    )
     return 0
 
 
