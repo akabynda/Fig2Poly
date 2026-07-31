@@ -16,7 +16,7 @@ source "$PROJECT_ROOT/server/lib/common.sh"
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 PY="$FIG2POLY_STORAGE/.venvs/maskdino/bin/python"
-OUTPUT="$RUNS_ROOT/maskdino_r50_768_b12_e10"
+OUTPUT="$RUNS_ROOT/maskdino_r50_768_b8_e10_early"
 record_run_metadata "$OUTPUT"
 resume=()
 [[ -f "$OUTPUT/last_checkpoint" ]] && resume=(--resume)
@@ -35,7 +35,7 @@ trap requeue_on_timeout USR1
   --variant r50 \
   --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
   --epochs 10 \
-  --global-batch 12 \
+  --global-batch 8 \
   --num-gpus 1 \
   --workers "${SLURM_CPUS_PER_TASK:-12}" \
   --image-size 768 \
