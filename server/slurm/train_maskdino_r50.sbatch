@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=64G
 #SBATCH --time=3-00:00:00
-#SBATCH --signal=B:TERM@300
+#SBATCH --signal=B:USR1@300
 #SBATCH --requeue
 #SBATCH --output=train_maskdino_r50_%j.out
 #SBATCH --error=train_maskdino_r50_%j.err
@@ -25,7 +25,7 @@ requeue_on_timeout() {
   scontrol requeue "$SLURM_JOB_ID"
   exit 0
 }
-trap requeue_on_timeout TERM
+trap requeue_on_timeout USR1
 
 "$PY" -m training.train_maskdino \
   --maskdino-root "$MASKDINO_ROOT" \
