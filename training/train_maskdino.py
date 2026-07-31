@@ -58,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image-size", type=int, default=1024)
     parser.add_argument("--base-lr", type=float)
     parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable Detectron2 automatic mixed-precision training",
+    )
+    parser.add_argument(
         "--max-iter",
         type=int,
         help="Override the epoch-derived iteration count (used by smoke tests)",
@@ -109,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         "DATALOADER.NUM_WORKERS", str(args.workers),
         "SOLVER.IMS_PER_BATCH", str(args.global_batch),
         "SOLVER.BASE_LR", str(learning_rate),
+        "SOLVER.AMP.ENABLED", str(args.amp),
         "SOLVER.MAX_ITER", str(max_iter),
         "SOLVER.STEPS", solver_steps,
         "SOLVER.CHECKPOINT_PERIOD", str(checkpoint_period),
@@ -137,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                 "solver_steps": solver_steps,
                 "global_batch": args.global_batch,
                 "base_lr": learning_rate,
+                "amp": args.amp,
                 "resume": args.resume,
             },
             indent=2,
