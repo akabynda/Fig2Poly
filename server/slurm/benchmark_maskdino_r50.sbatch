@@ -11,6 +11,7 @@
 set -Eeuo pipefail
 PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
 source "$PROJECT_ROOT/server/lib/common.sh"
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 PY="$FIG2POLY_STORAGE/.venvs/maskdino/bin/python"
 OUTPUT="$RUNS_ROOT/maskdino_r50_benchmark_${SLURM_JOB_ID}"
