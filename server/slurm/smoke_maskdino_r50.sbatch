@@ -24,6 +24,6 @@ OUTPUT="$RUNS_ROOT/maskdino_r50_smoke_empty_${SLURM_JOB_ID}"
   --global-batch 1 \
   --num-gpus 1 \
   --workers 0 \
-  --max-iter 1 \
+  --max-iter 2 \
   --checkpoint-period 1 \
   --eval-period 0

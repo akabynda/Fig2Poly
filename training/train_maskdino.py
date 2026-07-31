@@ -94,6 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint_period = args.checkpoint_period or max(100, steps_per_epoch // 4)
     eval_period = steps_per_epoch if args.eval_period is None else args.eval_period
     learning_rate = args.base_lr or 1e-4 * args.global_batch / 16
+    if max_iter <= 2:
+        solver_steps = "()"
+    else:
+        milestones = sorted({int(max_iter * .89), int(max_iter * .96)})
+        milestones = [step for step in milestones if 0 < step < max_iter]
+        solver_steps = f"({', '.join(str(step) for step in milestones)},)"
     opts = [
         "MODEL.WEIGHTS", str(args.weights.resolve()),
         "MODEL.SEM_SEG_HEAD.NUM_CLASSES", "1",
@@ -104,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         "SOLVER.IMS_PER_BATCH", str(args.global_batch),
         "SOLVER.BASE_LR", str(learning_rate),
         "SOLVER.MAX_ITER", str(max_iter),
-        "SOLVER.STEPS", f"({int(max_iter * .89)}, {int(max_iter * .96)})",
+        "SOLVER.STEPS", solver_steps,
         "SOLVER.CHECKPOINT_PERIOD", str(checkpoint_period),
         "TEST.EVAL_PERIOD", str(eval_period),
         "INPUT.IMAGE_SIZE", str(args.image_size),
@@ -128,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_iter": max_iter,
                 "checkpoint_period": checkpoint_period,
                 "eval_period": eval_period,
+                "solver_steps": solver_steps,
                 "global_batch": args.global_batch,
                 "base_lr": learning_rate,
                 "resume": args.resume,
