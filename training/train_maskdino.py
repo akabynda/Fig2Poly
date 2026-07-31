@@ -33,11 +33,132 @@ def register_datasets(dataset: str) -> None:
         )
 
 
-def worker(upstream_args, dataset: str, report: str | None):
+def install_early_stopping(
+    train_net,
+    patience: int,
+    metric: str,
+    min_delta: float,
+) -> None:
+    if patience <= 0:
+        return
+    from detectron2.engine import hooks
+    from detectron2.engine.hooks import HookBase
+    from detectron2.utils import comm
+
+    class EarlyStoppingReached(BaseException):
+        pass
+
+    class ValidationEarlyStopping(HookBase):
+        def __init__(self) -> None:
+            self.best_score = float("-inf")
+            self.best_iteration = -1
+            self.bad_epochs = 0
+
+        def state_dict(self) -> dict:
+            return {
+                "best_score": self.best_score,
+                "best_iteration": self.best_iteration,
+                "bad_epochs": self.bad_epochs,
+            }
+
+        def load_state_dict(self, state_dict: dict) -> None:
+            self.best_score = float(state_dict.get("best_score", float("-inf")))
+            self.best_iteration = int(state_dict.get("best_iteration", -1))
+            self.bad_epochs = int(state_dict.get("bad_epochs", 0))
+
+        def after_step(self) -> None:
+            next_iteration = self.trainer.iter + 1
+            period = int(self.trainer.cfg.TEST.EVAL_PERIOD)
+            evaluated = next_iteration == self.trainer.max_iter or (
+                period > 0 and next_iteration % period == 0
+            )
+            if not evaluated:
+                return
+            latest = self.trainer.storage.latest()
+            if metric not in latest:
+                raise RuntimeError(
+                    f"Early-stopping metric {metric!r} missing after validation; "
+                    f"available keys: {sorted(latest)}"
+                )
+            score = float(latest[metric][0])
+            improved = score > self.best_score + min_delta
+            if improved:
+                self.best_score = score
+                self.best_iteration = next_iteration
+                self.bad_epochs = 0
+                if comm.is_main_process():
+                    self.trainer.checkpointer.save(
+                        "model_best",
+                        iteration=next_iteration,
+                        early_stopping_metric=metric,
+                        early_stopping_score=score,
+                    )
+            else:
+                self.bad_epochs += 1
+            payload = {
+                "metric": metric,
+                "score": score,
+                "best_score": self.best_score,
+                "best_iteration": self.best_iteration,
+                "bad_epochs": self.bad_epochs,
+                "patience": patience,
+                "min_delta": min_delta,
+                "stopped": self.bad_epochs >= patience
+                and next_iteration < self.trainer.max_iter,
+            }
+            if comm.is_main_process():
+                target = Path(self.trainer.cfg.OUTPUT_DIR) / "early_stopping.json"
+                target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                print(json.dumps({"early_stopping": payload}), flush=True)
+            if payload["stopped"]:
+                raise EarlyStoppingReached(
+                    f"No {metric} improvement for {patience} validation epochs"
+                )
+
+    upstream_trainer = train_net.Trainer
+
+    class EarlyStoppingTrainer(upstream_trainer):
+        def build_hooks(self):
+            configured = super().build_hooks()
+            insertion = next(
+                (
+                    index + 1
+                    for index, hook in enumerate(configured)
+                    if isinstance(hook, hooks.EvalHook)
+                ),
+                len(configured),
+            )
+            configured.insert(insertion, ValidationEarlyStopping())
+            return configured
+
+        def train(self):
+            try:
+                return super().train()
+            except EarlyStoppingReached as error:
+                print(f"Early stopping completed successfully: {error}", flush=True)
+                return getattr(self, "_last_eval_results", {})
+
+    train_net.Trainer = EarlyStoppingTrainer
+
+
+def worker(
+    upstream_args,
+    dataset: str,
+    report: str | None,
+    early_stopping_patience: int,
+    early_stopping_metric: str,
+    early_stopping_min_delta: float,
+):
     register_datasets(dataset)
     import train_net
     from detectron2.utils import comm
 
+    install_early_stopping(
+        train_net,
+        early_stopping_patience,
+        early_stopping_metric,
+        early_stopping_min_delta,
+    )
     result = train_net.main(upstream_args)
     if report and comm.is_main_process():
         Path(report).write_text(json.dumps(result, indent=2, default=float), encoding="utf-8")
@@ -77,11 +198,26 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="Override validation interval in iterations; 0 disables periodic evaluation",
     )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=0,
+        help="Stop after this many validation epochs without improvement; 0 disables",
+    )
+    parser.add_argument("--early-stopping-metric", default="segm/AP")
+    parser.add_argument("--early-stopping-min-delta", type=float, default=0.01)
+    parser.add_argument(
+        "--disable-evaluation",
+        action="store_true",
+        help="Disable evaluation datasets entirely (benchmarking only)",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--eval-split", choices=("val", "test"), default="val")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
+    if args.disable_evaluation and args.early_stopping_patience:
+        parser.error("--disable-evaluation is incompatible with early stopping")
 
     maskdino_root = args.maskdino_root.resolve()
     dataset = args.dataset.resolve()
@@ -109,7 +245,8 @@ def main(argv: list[str] | None = None) -> int:
         "MODEL.WEIGHTS", str(args.weights.resolve()),
         "MODEL.SEM_SEG_HEAD.NUM_CLASSES", "1",
         "DATASETS.TRAIN", '("fig2poly_train",)',
-        "DATASETS.TEST", f'("fig2poly_{args.eval_split}",)',
+        "DATASETS.TEST",
+        "()" if args.disable_evaluation else f'("fig2poly_{args.eval_split}",)',
         "DATALOADER.FILTER_EMPTY_ANNOTATIONS", "False",
         "DATALOADER.NUM_WORKERS", str(args.workers),
         "SOLVER.IMS_PER_BATCH", str(args.global_batch),
@@ -141,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
                 "checkpoint_period": checkpoint_period,
                 "eval_period": eval_period,
                 "solver_steps": solver_steps,
+                "early_stopping_patience": args.early_stopping_patience,
+                "early_stopping_metric": args.early_stopping_metric,
+                "early_stopping_min_delta": args.early_stopping_min_delta,
+                "evaluation_enabled": not args.disable_evaluation,
                 "global_batch": args.global_batch,
                 "base_lr": learning_rate,
                 "amp": args.amp,
@@ -156,7 +297,14 @@ def main(argv: list[str] | None = None) -> int:
         num_machines=1,
         machine_rank=0,
         dist_url=upstream_args.dist_url,
-        args=(upstream_args, str(dataset), str(args.report.resolve()) if args.report else None),
+        args=(
+            upstream_args,
+            str(dataset),
+            str(args.report.resolve()) if args.report else None,
+            args.early_stopping_patience,
+            args.early_stopping_metric,
+            args.early_stopping_min_delta,
+        ),
     )
     return 0
 

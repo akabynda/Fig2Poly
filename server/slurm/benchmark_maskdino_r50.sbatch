@@ -22,11 +22,12 @@ OUTPUT="$RUNS_ROOT/maskdino_r50_benchmark_${SLURM_JOB_ID}"
   --variant r50 \
   --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
   --epochs 1 \
-  --global-batch 8 \
+  --global-batch 12 \
   --num-gpus 1 \
   --workers "${SLURM_CPUS_PER_TASK:-12}" \
   --image-size 768 \
   --amp \
   --max-iter 100 \
   --checkpoint-period 100 \
-  --eval-period 0
+  --eval-period 0 \
+  --disable-evaluation

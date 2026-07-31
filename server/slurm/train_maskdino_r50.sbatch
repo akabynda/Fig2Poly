@@ -15,7 +15,7 @@ PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
 source "$PROJECT_ROOT/server/lib/common.sh"
 
 PY="$FIG2POLY_STORAGE/.venvs/maskdino/bin/python"
-OUTPUT="$RUNS_ROOT/maskdino_r50_768_b8_e10"
+OUTPUT="$RUNS_ROOT/maskdino_r50_768_b12_e10"
 record_run_metadata "$OUTPUT"
 resume=()
 [[ -f "$OUTPUT/last_checkpoint" ]] && resume=(--resume)
@@ -34,11 +34,14 @@ trap requeue_on_timeout TERM
   --variant r50 \
   --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
   --epochs 10 \
-  --global-batch 8 \
+  --global-batch 12 \
   --num-gpus 1 \
   --workers "${SLURM_CPUS_PER_TASK:-12}" \
   --image-size 768 \
   --amp \
+  --early-stopping-patience 2 \
+  --early-stopping-metric segm/AP \
+  --early-stopping-min-delta 0.01 \
   "${resume[@]}" &
 trainer_pid=$!
 wait "$trainer_pid"
