@@ -12,7 +12,7 @@ PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
 source "$PROJECT_ROOT/server/lib/common.sh"
 
 VENV="$FIG2POLY_STORAGE/.venvs/yolo"
-python3.10 -m venv "$VENV"
+python3 -m venv --clear "$VENV"
 "$VENV/bin/pip" install --upgrade pip wheel
 "$VENV/bin/pip" install \
   torch==2.5.1 torchvision==0.20.1 \
