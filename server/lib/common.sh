@@ -36,5 +36,8 @@ record_run_metadata() {
   else
     printf 'unknown\n' > "$output/fig2poly_git_sha.txt"
   fi
-  nvidia-smi > "$output/nvidia_smi.txt"
+  if ! nvidia-smi > "$output/nvidia_smi.txt" 2>&1; then
+    printf 'nvidia-smi unavailable; training may still use CUDA\n' \
+      > "$output/nvidia_smi.txt"
+  fi
 }
