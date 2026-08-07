@@ -225,6 +225,21 @@ def existing_sample_ids(output: Path) -> set[str]:
     return result
 
 
+def existing_split_count(output: Path, split: str, dataset_source: str) -> int:
+    manifest = output / f"{split}.jsonl"
+    if not manifest.is_file():
+        return 0
+    count = 0
+    with manifest.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if record.get("dataset_source") == dataset_source:
+                count += 1
+    return count
+
+
 def convert_chartinfo(
     raw_root: Path,
     output: Path,
@@ -241,6 +256,7 @@ def convert_chartinfo(
         pairs = pairs[:limit]
     existing = existing_sample_ids(output)
     counts = {"train": 0, "val": 0, "test": 0, "curves": 0, "skipped": 0}
+    counts[official_split] = existing_split_count(output, official_split, dataset_name)
     for annotation_path, image_path in pairs:
         annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
         lines = chartinfo_lines(annotation)
@@ -338,6 +354,7 @@ def convert_lineex(
 
     existing = existing_sample_ids(output)
     counts = {"train": 0, "val": 0, "test": 0, "curves": 0, "skipped": 0}
+    counts[official_split] = existing_split_count(output, official_split, "lineex")
 
     def convert_group(image_id: int, annotations: list[dict]) -> None:
         if limit is not None and counts[official_split] + counts["skipped"] >= limit:
