@@ -10,6 +10,7 @@ __pycache__/
 dataset*/
 datasets/
 runs/
+real_test_results/
 .hf_cache/
 .ultralytics/
 generation*.log
