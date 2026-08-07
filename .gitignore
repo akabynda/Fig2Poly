@@ -11,6 +11,7 @@ dataset*/
 datasets/
 runs/
 real_test_results/
+.preview*/
 .hf_cache/
 .ultralytics/
 generation*.log
