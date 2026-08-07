@@ -57,9 +57,17 @@ class DatasetGenerator:
         config.validate()
         self.cfg = config
 
-    def _curve_specs(self, rng: random.Random, np_rng: np.random.Generator, scale: int) -> list[CurveSpec]:
-        count=0 if rng.random()<self.cfg.empty_plot_probability else rng.randint(self.cfg.min_curves,self.cfg.max_curves)
-        palette=list(rng.choice(PALETTES)); rng.shuffle(palette)
+    def _curve_specs(self, rng: random.Random, np_rng: np.random.Generator, scale: int,
+                     max_curves: int | None = None) -> list[CurveSpec]:
+        upper = min(self.cfg.max_curves, max_curves or self.cfg.max_curves)
+        lower = min(self.cfg.min_curves, upper)
+        if rng.random()<self.cfg.empty_plot_probability:
+            count=0
+        else:
+            choices=list(range(lower,upper+1))
+            weights=[max(1,round(100*np.exp(-.48*abs(value-3)))) for value in choices]
+            count=rng.choices(choices,weights)[0]
+        palette=list(rng.choices(PALETTES,[36,31,29,4])[0]); rng.shuffle(palette)
         roll=rng.random()
         if roll<self.cfg.same_color_probability:
             colors=[rng.choice(palette)]*count
@@ -81,26 +89,29 @@ class DatasetGenerator:
                 )[0]
                 degree=0
                 if family=="sine_mix":
+                    component_max=max(1,round(1+2*self.cfg.curve_complexity))
                     parameters={"components":[
-                        [rng.uniform(.15,1.0),rng.uniform(.5,5.5),rng.uniform(-np.pi,np.pi)]
-                        for _ in range(rng.randint(1,4))
+                        [rng.uniform(.15,1.0),rng.uniform(.5,1.8+3.7*self.cfg.curve_complexity),rng.uniform(-np.pi,np.pi)]
+                        for _ in range(rng.randint(1,component_max))
                     ],"trend":rng.uniform(-.7,.7)}
                 elif family in ("gaussian_peaks","lorentzian_peaks"):
+                    peak_max=max(1,round(1+3*self.cfg.curve_complexity))
                     parameters={"peaks":[
                         [rng.uniform(-1.4,1.4),rng.uniform(-.85,.85),rng.uniform(.025,.32)]
-                        for _ in range(rng.randint(1,5))
+                        for _ in range(rng.randint(1,peak_max))
                     ],"trend":rng.uniform(-.45,.45),"baseline":rng.uniform(-.3,.3)}
                 elif family=="spline":
-                    n=rng.randint(5,13)
+                    n=rng.randint(5,max(5,round(6+7*self.cfg.curve_complexity)))
                     parameters={"control_x":np.linspace(-1,1,n).round(6).tolist(),
                                 "control_y":np_rng.normal(0,1,n).round(6).tolist()}
                 elif family=="step":
+                    step_max=max(1,round(1+3*self.cfg.curve_complexity))
                     parameters={"steps":[
                         [rng.uniform(-1.1,1.1),rng.uniform(-.8,.8),rng.uniform(.015,.12)]
-                        for _ in range(rng.randint(1,5))
+                        for _ in range(rng.randint(1,step_max))
                     ],"trend":rng.uniform(-.5,.5)}
                 else:
-                    parameters={"amplitude":rng.uniform(.5,1.4),"frequency":rng.uniform(2,9),
+                    parameters={"amplitude":rng.uniform(.5,1.4),"frequency":rng.uniform(2,3+6*self.cfg.curve_complexity),
                                 "phase":rng.uniform(-np.pi,np.pi),"decay":rng.uniform(.1,1.8),
                                 "trend":rng.uniform(-.35,.35)}
             else:
@@ -110,21 +121,61 @@ class DatasetGenerator:
             specs.append(CurveSpec(family,degree,coefficients,parameters,colors[i],
                          rng.randint(1,4)*scale,rng.choices(["solid","dashed","dotted","dashdot"],[65,16,10,9])[0],
                          rng.choice([f"{random_text(rng,1,2)} {i+1}",f"f{i+1}({rng.choice(SYMBOLS[:4])})"])))
-        # Real charts often contain related experimental series: parallel curves,
-        # small offsets of one response, or curves that nearly coincide before
-        # separating. Reusing the mathematical family while retaining independent
-        # visual styles creates those hard instance-association cases.
+        # Related series must remain distinct. Exact duplicate targets are
+        # impossible to identify from pixels and teach query-based models to emit
+        # duplicate masks for the same visible line.
         if count >= 2 and rng.random() < self.cfg.related_curves_probability:
             group_size = rng.randint(2, min(5, count))
             related_indices = rng.sample(range(count), group_size)
             base = specs[related_indices[0]]
-            for related_index in related_indices:
+            for position, related_index in enumerate(related_indices):
                 original = specs[related_index]
+                coefficients = list(base.coefficients)
+                parameters = deepcopy(base.parameters)
+                if position:
+                    if base.family == "polynomial":
+                        coefficients = [
+                            round(value + rng.gauss(0, .035 / (degree + 1)), 8)
+                            for degree, value in enumerate(coefficients)
+                        ]
+                        coefficients[0] = round(coefficients[0] + rng.choice((-1, 1)) * rng.uniform(.06, .18), 8)
+                    elif base.family == "sine_mix":
+                        parameters["components"] = [
+                            [amplitude * rng.uniform(.94, 1.06),
+                             frequency * rng.uniform(.98, 1.02),
+                             phase + rng.uniform(-.08, .08)]
+                            for amplitude, frequency, phase in parameters["components"]
+                        ]
+                        parameters["trend"] += rng.uniform(-.08, .08)
+                    elif base.family in ("gaussian_peaks", "lorentzian_peaks"):
+                        parameters["peaks"] = [
+                            [amplitude * rng.uniform(.94, 1.06), center + rng.uniform(-.035, .035),
+                             width * rng.uniform(.94, 1.06)]
+                            for amplitude, center, width in parameters["peaks"]
+                        ]
+                        parameters["baseline"] += rng.choice((-1, 1)) * rng.uniform(.05, .14)
+                    elif base.family == "spline":
+                        offset = rng.choice((-1, 1)) * rng.uniform(.08, .20)
+                        parameters["control_y"] = [
+                            round(value + offset + rng.uniform(-.035, .035), 6)
+                            for value in parameters["control_y"]
+                        ]
+                    elif base.family == "step":
+                        parameters["steps"] = [
+                            [amplitude * rng.uniform(.94, 1.06), center + rng.uniform(-.035, .035), width]
+                            for amplitude, center, width in parameters["steps"]
+                        ]
+                        parameters["trend"] += rng.uniform(-.08, .08)
+                    else:
+                        parameters["amplitude"] *= rng.uniform(.94, 1.06)
+                        parameters["frequency"] *= rng.uniform(.98, 1.02)
+                        parameters["phase"] += rng.uniform(-.08, .08)
+                        parameters["trend"] += rng.uniform(-.08, .08)
                 specs[related_index] = CurveSpec(
                     family=base.family,
                     degree=base.degree,
-                    coefficients=list(base.coefficients),
-                    parameters=deepcopy(base.parameters),
+                    coefficients=coefficients,
+                    parameters=parameters,
                     color=original.color,
                     width=original.width,
                     style=original.style,
@@ -168,7 +219,9 @@ class DatasetGenerator:
 
     def _render_multipanel(self,rng: random.Random,np_rng: np.random.Generator):
         s=self.cfg.supersample; w,h=self.cfg.width*s,self.cfg.height*s
-        count=rng.choices([2,3,4,5,6],[12,22,28,24,14])[0]
+        panel_options=list(range(2,self.cfg.max_panels+1))
+        panel_weights=[{2:18,3:30,4:30,5:14,6:8}[value] for value in panel_options]
+        count=rng.choices(panel_options,panel_weights)[0]
         if count==2:
             row_counts=rng.choice([[2],[1,1]])
         elif count==3:
@@ -200,6 +253,7 @@ class DatasetGenerator:
                 panel_image,panel_masks,panel_meta=self._render_base(
                     rng,np_rng,allow_multipanel=False,force_plot_full=True,
                     forced_bg_kind=bg_kind,
+                    forced_curve_max=min(self.cfg.max_curves,self.cfg.max_curves_per_panel),
                 )
                 panel_image=panel_image.resize((x1-x0,y1-y0),Image.Resampling.LANCZOS)
                 image.paste(panel_image,(x0,y0))
@@ -239,7 +293,8 @@ class DatasetGenerator:
 
     def _render_base(self,rng: random.Random,np_rng: np.random.Generator,
                      allow_multipanel: bool=True,force_plot_full: bool=False,
-                     forced_bg_kind: str|None=None):
+                     forced_bg_kind: str|None=None,
+                     forced_curve_max: int|None=None):
         if allow_multipanel and rng.random()<self.cfg.multi_panel_probability:
             return self._render_multipanel(rng,np_rng)
         s=self.cfg.supersample; w,h=self.cfg.width*s,self.cfg.height*s
@@ -254,7 +309,8 @@ class DatasetGenerator:
         occluder_meta=[]
         page_layout=not force_plot_full and rng.random()<self.cfg.page_layout_probability
         if page_layout:
-            plot_w=int(w*rng.uniform(.38,.82)); plot_h=int(h*rng.uniform(.30,.72))
+            minimum=self.cfg.page_plot_min_fraction
+            plot_w=int(w*rng.uniform(minimum,.90)); plot_h=int(h*rng.uniform(minimum,.82))
             l=rng.randint(int(.05*w),max(int(.05*w),w-plot_w-int(.05*w)))
             t=rng.randint(int(.08*h),max(int(.08*h),h-plot_h-int(.10*h)))
             plot=(l,t,l+plot_w,t+plot_h)
@@ -338,12 +394,30 @@ class DatasetGenerator:
             for i in range(ny+1):
                 y=b-(b-t)*i/ny; draw.line((l-4*s,y,l,y),fill=fg,width=s)
                 if rng.random()>.08: draw.text((max(0,l-34*s),y-6*s),f"{ylo+(yhi-ylo)*i/ny:g}",fill=fg,font=fsmall)
-        specs=self._curve_specs(rng,np_rng,s); masks=[Image.new("L",(w,h),0) for _ in specs]
+        specs=self._curve_specs(rng,np_rng,s,forced_curve_max)
+        bg_luminance=sum(bg)/3
+        contrast_colors=["#0072B2","#E69F00","#009E73","#D55E00","#CC79A7","#56B4E9"]
+        for spec in specs:
+            rgb=tuple(int(spec.color[index:index+2],16) for index in (1,3,5))
+            if abs(sum(rgb)/3-bg_luminance)<65:
+                spec.color=rng.choice(contrast_colors)
+        masks=[Image.new("L",(w,h),0) for _ in specs]
         x=np.linspace(-1,1,self.cfg.max_points); curve_meta=[]
+        relation_transforms: dict[int,tuple[float,float]]={}
         for idx,(spec,mask) in enumerate(zip(specs,masks),1):
             y=self._curve_values(x,spec)
             qlo,qhi=np.nanpercentile(y,[3,97]); span=max(.05,qhi-qlo)
-            yn=(y-(qlo+qhi)/2-rng.uniform(-.3,.3)*span)/(span*rng.uniform(.65,1.55))+rng.uniform(-.18,.18)
+            normalized=(y-(qlo+qhi)/2)/span
+            if spec.relation_group is not None and spec.relation_group in relation_transforms:
+                amplitude,offset=relation_transforms[spec.relation_group]
+                amplitude*=rng.uniform(.96,1.04)
+                offset+=rng.choice((-1,1))*rng.uniform(.035,.085)
+            else:
+                amplitude=rng.uniform(.55,.95)
+                offset=rng.uniform(-.24,.24)
+                if spec.relation_group is not None:
+                    relation_transforms[spec.relation_group]=(amplitude,offset)
+            yn=normalized*amplitude+offset
             xp=l+(x+1)*.5*(r-l); yp=(t+b)/2-yn*(b-t); segments=self._segments(xp,yp,plot)
             md=ImageDraw.Draw(mask); draw_polyline(draw,segments,spec.color,spec.width,spec.style)
             draw_polyline(md,segments,255,spec.width+max(1,s),spec.style)
@@ -444,9 +518,12 @@ class DatasetGenerator:
         seed=self.cfg.seed+index*1_000_003; rng=random.Random(seed); np_rng=np.random.default_rng(seed)
         image,masks,meta=self._render_base(rng,np_rng)
         image,masks,geometry=transform_pair(image,masks,rng,(self.cfg.width,self.cfg.height),
-            self.cfg.crop_probability,self.cfg.rotation_probability,self.cfg.perspective_probability)
-        image,degradation=degrade(image,rng,np_rng) if rng.random()<self.cfg.degradation_probability else (image,{"applied":[]})
-        quality=rng.randint(35,96); buffer=io.BytesIO(); image.save(buffer,"JPEG",quality=quality,subsampling=rng.choice([0,1,2]))
+            self.cfg.crop_probability,self.cfg.rotation_probability,self.cfg.perspective_probability,
+            self.cfg.crop_min_keep,self.cfg.rotation_max_degrees,
+            self.cfg.perspective_max_strength)
+        image,degradation=degrade(image,rng,np_rng,self.cfg.degradation_strength) if rng.random()<self.cfg.degradation_probability else (image,{"applied":[]})
+        quality=rng.randint(self.cfg.min_jpeg_quality,self.cfg.max_jpeg_quality)
+        buffer=io.BytesIO(); image.save(buffer,"JPEG",quality=quality,subsampling=rng.choice([0,1,2]))
         buffer.seek(0); image=Image.open(buffer).convert("RGB"); name=f"{index:08d}"
         _atomic_save_image(image,out/"images"/split/f"{name}.jpg","JPEG",quality=95)
         inst=np.zeros((self.cfg.height,self.cfg.width),dtype=np.uint16)
@@ -499,7 +576,7 @@ class DatasetGenerator:
         n_train=count-n_val-n_test
         state_path=out/"generation_state.json"
         requested_state={
-            "format_version":4,
+            "format_version":5,
             "count":count,
             "val_fraction":val_fraction,
             "test_fraction":test_fraction,
@@ -548,7 +625,7 @@ class DatasetGenerator:
                     if completed%250==0 or completed==len(jobs):
                         print(f"generated {completed}/{len(jobs)} new samples",flush=True)
         manifest.sort(key=lambda item:item["id"])
-        summary={"format_version":4,"count":count,"splits":{s:sum(x["split"]==s for x in manifest) for s in ("train","val","test")},
+        summary={"format_version":5,"count":count,"splits":{s:sum(x["split"]==s for x in manifest) for s in ("train","val","test")},
                  "target_format":"one independent binary PNG per visible curve",
                  "mask_semantics":"visible except non-curve occluders; curve-curve intersections are multi-label",
                  "classes":{"0":"background","255":"curve in curve_masks"},

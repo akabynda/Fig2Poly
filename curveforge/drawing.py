@@ -74,17 +74,21 @@ def draw_polyline(draw: ImageDraw.ImageDraw, segments: Iterable[list[tuple[float
 
 def transform_pair(image: Image.Image, masks: list[Image.Image], rng: random.Random,
                    out_size: tuple[int, int], crop_p: float, rotate_p: float,
-                   perspective_p: float) -> tuple[Image.Image, list[Image.Image], dict]:
+                   perspective_p: float, crop_min_keep: float = 0.62,
+                   rotation_max_degrees: float = 16.0,
+                   perspective_max_strength: float = 0.075) -> tuple[Image.Image, list[Image.Image], dict]:
     meta: dict = {"rotation_deg": 0.0, "crop": None, "perspective": False}
     if rng.random() < rotate_p:
-        angle = rng.uniform(-16, 16)
+        angle = rng.uniform(-rotation_max_degrees, rotation_max_degrees)
         meta["rotation_deg"] = round(angle, 3)
         fill = (rng.randint(225, 255),) * 3
         image = image.rotate(angle, Image.Resampling.BICUBIC, expand=True, fillcolor=fill)
         masks = [m.rotate(angle, Image.Resampling.NEAREST, expand=True, fillcolor=0) for m in masks]
     if rng.random() < perspective_p:
         w, h = image.size
-        strength = rng.uniform(0.015, 0.075)
+        strength = rng.uniform(
+            min(0.015, perspective_max_strength), perspective_max_strength
+        )
         coeffs = (1+rng.uniform(-strength,strength), rng.uniform(-strength,strength), rng.uniform(-strength*w,strength*w),
                   rng.uniform(-strength,strength), 1+rng.uniform(-strength,strength), rng.uniform(-strength*h,strength*h),
                   rng.uniform(-strength/w,strength/w), rng.uniform(-strength/h,strength/h))
@@ -94,7 +98,7 @@ def transform_pair(image: Image.Image, masks: list[Image.Image], rng: random.Ran
     w, h = image.size
     ratio = out_size[0] / out_size[1]
     if rng.random() < crop_p:
-        keep = rng.uniform(0.62, 0.96)
+        keep = rng.uniform(crop_min_keep, 0.98)
         cw, ch = max(64,int(w*keep)), max(64,int(h*keep))
         if cw/ch > ratio: cw = int(ch*ratio)
         else: ch = int(cw/ratio)
@@ -110,27 +114,29 @@ def transform_pair(image: Image.Image, masks: list[Image.Image], rng: random.Ran
     return image,masks,meta
 
 
-def degrade(image: Image.Image, rng: random.Random, np_rng: np.random.Generator) -> tuple[Image.Image, dict]:
+def degrade(image: Image.Image, rng: random.Random, np_rng: np.random.Generator,
+            strength: float = 1.0) -> tuple[Image.Image, dict]:
     applied=[]
-    if rng.random()<.24:
-        w,h=image.size; factor=rng.uniform(.42,.82)
+    if rng.random()<.24*strength:
+        w,h=image.size
+        factor=rng.uniform(1-(1-.42)*strength,1-(1-.82)*strength)
         image=image.resize((max(32,int(w*factor)),max(32,int(h*factor))),Image.Resampling.BILINEAR)
         image=image.resize((w,h),rng.choice([Image.Resampling.BILINEAR,Image.Resampling.BICUBIC]))
         applied.append("low_resolution")
-    if rng.random()<.14:
+    if rng.random()<.14*strength:
         gray=image.convert("L")
         image=Image.merge("RGB",(gray,gray,gray)); applied.append("grayscale")
-    if rng.random()<.55:
-        image=ImageEnhance.Contrast(image).enhance(rng.uniform(.65,1.35))
-        image=ImageEnhance.Brightness(image).enhance(rng.uniform(.78,1.20)); applied.append("tone")
-    if rng.random()<.42:
-        image=image.filter(ImageFilter.GaussianBlur(rng.uniform(.25,1.5))); applied.append("blur")
-    if rng.random()<.45:
-        arr=np.asarray(image).astype(np.float32); arr+=np_rng.normal(0,rng.uniform(1.5,12),arr.shape)
+    if rng.random()<.55*strength:
+        image=ImageEnhance.Contrast(image).enhance(rng.uniform(1-.35*strength,1+.35*strength))
+        image=ImageEnhance.Brightness(image).enhance(rng.uniform(1-.22*strength,1+.20*strength)); applied.append("tone")
+    if rng.random()<.42*strength:
+        image=image.filter(ImageFilter.GaussianBlur(rng.uniform(.25,.25+1.25*strength))); applied.append("blur")
+    if rng.random()<.45*strength:
+        arr=np.asarray(image).astype(np.float32); arr+=np_rng.normal(0,rng.uniform(1.5,1.5+10.5*strength),arr.shape)
         image=Image.fromarray(np.clip(arr,0,255).astype(np.uint8),"RGB"); applied.append("noise")
-    if rng.random()<.20:
+    if rng.random()<.20*strength:
         image=image.filter(ImageFilter.UnsharpMask(radius=2,percent=rng.randint(80,220),threshold=2)); applied.append("sharpen")
-    if rng.random()<.16:
+    if rng.random()<.16*strength:
         arr=np.asarray(image).copy()
         spacing=rng.randint(3,9); offset=rng.randrange(spacing)
         arr[offset::spacing]=np.clip(arr[offset::spacing].astype(np.int16)+rng.randint(-12,12),0,255)

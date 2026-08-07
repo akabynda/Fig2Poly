@@ -16,7 +16,7 @@ source "$PROJECT_ROOT/server/lib/common.sh"
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 PY="$FIG2POLY_STORAGE/.venvs/maskdino/bin/python"
-OUTPUT="$RUNS_ROOT/maskdino_r50_768_b8_e10_early"
+OUTPUT="$RUNS_ROOT/maskdino_r50_lineex_balanced_v5"
 record_run_metadata "$OUTPUT"
 resume=()
 [[ -f "$OUTPUT/last_checkpoint" ]] && resume=(--resume)
@@ -30,7 +30,7 @@ trap requeue_on_timeout USR1
 
 "$PY" -m training.train_maskdino \
   --maskdino-root "$MASKDINO_ROOT" \
-  --dataset "$DATA_ROOT/coco_synthetic_200k" \
+  --dataset "$DATA_ROOT/coco_lineex_balanced_v5" \
   --output "$OUTPUT" \
   --variant r50 \
   --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
@@ -40,9 +40,11 @@ trap requeue_on_timeout USR1
   --workers "${SLURM_CPUS_PER_TASK:-12}" \
   --image-size 768 \
   --amp \
+  --curve-loss-weight 1.0 \
+  --curve-metrics \
   --early-stopping-patience 2 \
-  --early-stopping-metric segm/AP \
-  --early-stopping-min-delta 0.01 \
+  --early-stopping-metric curve/score_6b \
+  --early-stopping-min-delta 0.05 \
   "${resume[@]}" &
 trainer_pid=$!
 wait "$trainer_pid"

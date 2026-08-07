@@ -152,6 +152,8 @@ bash server/status.sh
 
 - COCO Mask AP, AP50 и AP75;
 - centerline F1 с допусками в пикселях;
+- LineFormer/ChartInfo task 6a и count-penalized task 6b после извлечения
+  центральной линии из каждой instance mask;
 - симметричное расстояние между центральными линиями;
 - точность количества кривых и count MAE;
 - CHART-Info Task 6a на совместимом публичном benchmark;

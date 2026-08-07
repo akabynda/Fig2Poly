@@ -39,6 +39,17 @@ bash server/convert_public.sh
 bash server/prepare_training_data.sh
 ```
 
+The current balanced production recipe is submitted as a resumable dependency
+chain:
+
+```bash
+bash server/submit_balanced_lineex_v5.sh
+```
+
+It uses 100k LineEX train images plus 100k calmer CurveForge images. Complete
+official LineEX validation/test splits are mirrored by synthetic splits and
+kept separate from training.
+
 Generation and downloads are resumable. `combined` uses hard links when source
 and destination are on the same filesystem. Both YOLO and MaskDINO are prepared
 from the same combined JSONL manifests.
@@ -47,6 +58,11 @@ MaskDINO receives exact compressed COCO RLE masks, including disconnected
 dashes and visible-only gaps. Native YOLO labels are polygons and cannot encode
 one disconnected instance exactly; its converter joins components and records
 this limitation in `yolo_conversion.json`.
+
+The v5 MaskDINO job keeps BCE + Dice instance supervision and adds a
+thickness-invariant centreline/tangent auxiliary loss. Validation reports the
+LineFormer/ChartInfo 6a and 6b continuous-line scores; early stopping follows
+the count-penalized 6b score instead of COCO AP alone.
 
 ## 4. Smoke test before full training
 

@@ -154,6 +154,11 @@ def test_related_curve_group_is_recorded():
     related=[curve for curve in metadata["curves"] if curve["relation_group"]==1]
     assert 2<=len(related)<=4
     assert len({curve["family"] for curve in related})==1
+    signatures={
+        (tuple(curve["coefficients"]),json.dumps(curve["function_parameters"],sort_keys=True))
+        for curve in related
+    }
+    assert len(signatures)==len(related)
 
 
 def test_multi_panel_keeps_one_mask_per_curve():
@@ -177,3 +182,17 @@ def test_multi_panel_keeps_one_mask_per_curve():
         panel["id"] for panel in metadata["panels"]
     }
     assert all(mask.getbbox() is not None for mask in masks)
+
+
+def test_balanced_profile_has_readability_limits():
+    profile = GeneratorConfig.from_json(
+        Path(__file__).parents[1] / "configs" / "balanced_lineex_v5.json"
+    )
+    assert profile.max_curves <= 6
+    assert profile.max_panels <= 3
+    assert profile.max_curves_per_panel <= 3
+    assert profile.curve_complexity <= 0.5
+    assert profile.page_plot_min_fraction >= 0.55
+    assert profile.page_layout_probability <= 0.05
+    assert profile.multi_panel_probability <= 0.05
+    assert profile.crop_probability <= 0.05

@@ -12,9 +12,19 @@ class GeneratorConfig:
     supersample: int = 2
     min_curves: int = 1
     max_curves: int = 10
+    max_panels: int = 6
+    max_curves_per_panel: int = 6
     min_degree: int = 1
     max_degree: int = 9
     max_points: int = 900
+    curve_complexity: float = 1.0
+    page_plot_min_fraction: float = 0.38
+    crop_min_keep: float = 0.62
+    rotation_max_degrees: float = 16.0
+    perspective_max_strength: float = 0.075
+    degradation_strength: float = 1.0
+    min_jpeg_quality: int = 35
+    max_jpeg_quality: int = 96
     crop_probability: float = 0.48
     rotation_probability: float = 0.40
     perspective_probability: float = 0.25
@@ -44,8 +54,26 @@ class GeneratorConfig:
             raise ValueError("supersample must be in [1, 4]")
         if not 1 <= self.min_curves <= self.max_curves <= 255:
             raise ValueError("curve count must satisfy 1 <= min <= max <= 255")
+        if not 2 <= self.max_panels <= 6:
+            raise ValueError("max_panels must be in [2, 6]")
+        if not 1 <= self.max_curves_per_panel <= 255:
+            raise ValueError("max_curves_per_panel must be in [1, 255]")
         if not 1 <= self.min_degree <= self.max_degree <= 20:
             raise ValueError("degree must satisfy 1 <= min <= max <= 20")
+        if not 0 <= self.curve_complexity <= 1:
+            raise ValueError("curve_complexity must be in [0, 1]")
+        if not 0.35 <= self.page_plot_min_fraction <= 0.9:
+            raise ValueError("page_plot_min_fraction must be in [0.35, 0.9]")
+        if not 0.5 <= self.crop_min_keep <= 1:
+            raise ValueError("crop_min_keep must be in [0.5, 1]")
+        if not 0 <= self.rotation_max_degrees <= 45:
+            raise ValueError("rotation_max_degrees must be in [0, 45]")
+        if not 0 <= self.perspective_max_strength <= 0.2:
+            raise ValueError("perspective_max_strength must be in [0, 0.2]")
+        if not 0 <= self.degradation_strength <= 1:
+            raise ValueError("degradation_strength must be in [0, 1]")
+        if not 20 <= self.min_jpeg_quality <= self.max_jpeg_quality <= 100:
+            raise ValueError("JPEG quality must satisfy 20 <= min <= max <= 100")
         probability_fields = (
             "crop_probability", "rotation_probability", "perspective_probability",
             "degradation_probability", "occlusion_probability", "same_color_probability",

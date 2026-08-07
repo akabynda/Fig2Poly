@@ -148,10 +148,25 @@ def worker(
     early_stopping_patience: int,
     early_stopping_metric: str,
     early_stopping_min_delta: float,
+    curve_loss_weight: float,
+    curve_metrics: bool,
+    curve_score_threshold: float,
+    curve_sample_interval: int,
 ):
     register_datasets(dataset)
     import train_net
     from detectron2.utils import comm
+
+    if curve_loss_weight > 0:
+        from training.maskdino_curve_loss import install_curve_geometry_loss
+
+        install_curve_geometry_loss(curve_loss_weight)
+    if curve_metrics:
+        from training.maskdino_line_evaluator import install_chart_line_evaluator
+
+        install_chart_line_evaluator(
+            train_net, curve_score_threshold, curve_sample_interval
+        )
 
     install_early_stopping(
         train_net,
@@ -206,6 +221,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--early-stopping-metric", default="segm/AP")
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.01)
+    parser.add_argument(
+        "--curve-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the thickness-invariant centreline/tangent auxiliary loss",
+    )
+    parser.add_argument(
+        "--curve-metrics",
+        action="store_true",
+        help="Evaluate LineFormer/ChartInfo task 6a and 6b line scores",
+    )
+    parser.add_argument("--curve-score-threshold", type=float, default=0.25)
+    parser.add_argument("--curve-sample-interval", type=int, default=4)
     parser.add_argument(
         "--disable-evaluation",
         action="store_true",
@@ -286,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
                 "base_lr": learning_rate,
                 "amp": args.amp,
                 "resume": args.resume,
+                "curve_loss_weight": args.curve_loss_weight,
+                "curve_metrics": args.curve_metrics,
+                "curve_score_threshold": args.curve_score_threshold,
+                "curve_sample_interval": args.curve_sample_interval,
             },
             indent=2,
         ),
@@ -304,6 +336,10 @@ def main(argv: list[str] | None = None) -> int:
             args.early_stopping_patience,
             args.early_stopping_metric,
             args.early_stopping_min_delta,
+            args.curve_loss_weight,
+            args.curve_metrics,
+            args.curve_score_threshold,
+            args.curve_sample_interval,
         ),
     )
     return 0
