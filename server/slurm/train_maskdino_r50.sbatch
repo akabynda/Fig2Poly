@@ -33,12 +33,13 @@ trap requeue_on_timeout USR1
   --dataset "$DATA_ROOT/coco_lineex_balanced_v5" \
   --output "$OUTPUT" \
   --variant r50 \
-  --weights "$CACHE_ROOT/weights/maskdino_r50.pth" \
+  --weights "$RUNS_ROOT/maskdino_r50_768_b8_e10_early/model_best.pth" \
   --epochs 10 \
-  --global-batch 8 \
+  --global-batch 12 \
   --num-gpus 1 \
   --workers "${SLURM_CPUS_PER_TASK:-12}" \
   --image-size 768 \
+  --base-lr 2e-5 \
   --amp \
   --curve-loss-weight 1.0 \
   --curve-metrics \
