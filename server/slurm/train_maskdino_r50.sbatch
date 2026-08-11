@@ -21,8 +21,18 @@ record_run_metadata "$OUTPUT"
 resume=()
 [[ -f "$OUTPUT/last_checkpoint" ]] && resume=(--resume)
 
+trainer_pid=""
 requeue_on_timeout() {
-  echo "Received SLURM timeout signal; requeueing from the latest checkpoint"
+  # The signal is delivered to the batch shell only (SBATCH --signal=B:...).
+  # Stop its background trainer before requeueing, otherwise the old process
+  # may keep the GPU allocation alive and collide with the resumed process.
+  trap - USR1
+  echo "Received SLURM timeout signal; stopping trainer before requeue"
+  if [[ -n "$trainer_pid" ]] && kill -0 "$trainer_pid" 2>/dev/null; then
+    kill -TERM "$trainer_pid" 2>/dev/null || true
+    wait "$trainer_pid" || true
+  fi
+  echo "Requeueing from the latest checkpoint"
   scontrol requeue "$SLURM_JOB_ID"
   exit 0
 }
