@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=maskdino_r50
 #SBATCH --partition=aichem
+#SBATCH --nodelist=aihub
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=64G
