@@ -15,6 +15,8 @@ if [[ ! -d "$MASKDINO_ROOT/.git" ]]; then
   git clone https://github.com/IDEA-Research/MaskDINO.git "$MASKDINO_ROOT"
 fi
 git -C "$MASKDINO_ROOT" rev-parse HEAD > "$CACHE_ROOT/maskdino_git_sha.txt"
+"$VENV/bin/python" -m training.patch_maskdino_numerics \
+  --maskdino-root "$MASKDINO_ROOT"
 "$VENV/bin/pip" install -r "$MASKDINO_ROOT/requirements.txt"
 (
   cd "$MASKDINO_ROOT/maskdino/modeling/pixel_decoder/ops"

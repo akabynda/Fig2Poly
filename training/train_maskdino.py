@@ -254,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"MaskDINO config not found: {config}")
     if not args.weights.is_file() and not args.resume:
         parser.error(f"pretrained checkpoint not found: {args.weights}")
+    from training.patch_maskdino_numerics import patch_matcher
+
+    patch_matcher(maskdino_root)
     sys.path.insert(0, str(maskdino_root))
     import train_net
     from detectron2.engine import launch

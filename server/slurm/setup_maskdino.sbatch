@@ -49,6 +49,8 @@ fi
 git -C "$MASKDINO_ROOT" rev-parse HEAD > "$CACHE_ROOT/maskdino_git_sha.txt"
 "$VENV/bin/python" -m training.patch_maskdino_rle \
   --maskdino-root "$MASKDINO_ROOT"
+"$VENV/bin/python" -m training.patch_maskdino_numerics \
+  --maskdino-root "$MASKDINO_ROOT"
 
 (
   cd "$MASKDINO_ROOT/maskdino/modeling/pixel_decoder/ops"
