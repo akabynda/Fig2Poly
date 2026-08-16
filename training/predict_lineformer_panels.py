@@ -148,7 +148,7 @@ def detect_plot_boxes(image: np.ndarray) -> list[tuple[int, int, int, int]]:
         ):
             selected.append(box)
     selected.sort(key=lambda box: (box[1], box[0]))
-    return selected if len(selected) >= 2 else [(0, 0, width, height)]
+    return selected if selected else [(0, 0, width, height)]
 
 
 def mask_centerline(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

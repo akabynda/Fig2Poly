@@ -27,10 +27,21 @@ def test_detects_open_and_closed_plot_panels() -> None:
     assert boxes[1][0] > 400 and boxes[1][2] > 800
 
 
-def test_falls_back_to_full_image_without_multiple_panels() -> None:
+def test_detects_a_single_open_plot() -> None:
     image = np.full((300, 500, 3), 255, dtype=np.uint8)
     cv2.line(image, (30, 270), (470, 270), (0, 0, 0), 2)
     cv2.line(image, (30, 30), (30, 270), (0, 0, 0), 2)
+
+    boxes = detect_plot_boxes(image)
+
+    assert len(boxes) == 1
+    x1, y1, x2, y2 = boxes[0]
+    assert x1 <= 30 <= x2 and y1 <= 30 < 270 <= y2
+    assert boxes[0] != (0, 0, 500, 300)
+
+
+def test_falls_back_to_full_image_without_plot_axes() -> None:
+    image = np.full((300, 500, 3), 255, dtype=np.uint8)
 
     assert detect_plot_boxes(image) == [(0, 0, 500, 300)]
 
