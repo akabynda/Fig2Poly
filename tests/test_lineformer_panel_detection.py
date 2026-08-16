@@ -5,6 +5,7 @@ from training.predict_lineformer_panels import (
     centerlines_are_duplicates,
     clean_prediction_tracks,
     detect_plot_boxes,
+    local_regression_error,
     mask_centerline,
     suppress_centerline_duplicates,
 )
@@ -122,3 +123,31 @@ def test_color_resolves_curve_ownership_at_nearby_junction() -> None:
 
     assert np.all(cleaned[0]["mask"][branch])
     assert np.all(cleaned[1]["mask"][branch] == 0)
+
+
+def test_local_regression_resolves_same_color_curve_fragment() -> None:
+    image = np.full((120, 180, 3), 255, dtype=np.uint8)
+    upper = np.zeros((120, 180), dtype=bool)
+    middle = np.zeros_like(upper)
+    fragment = np.zeros_like(upper)
+    upper_points = np.asarray([
+        (x, 30 + int(0.004 * (x - 20) ** 2)) for x in range(10, 81)
+    ], dtype=np.int32)
+    fragment_points = np.asarray([
+        (x, 30 + int(0.004 * (x - 20) ** 2)) for x in range(84, 111)
+    ], dtype=np.int32)
+    cv2.polylines(upper, [upper_points], False, True, 3)
+    cv2.polylines(fragment, [fragment_points], False, True, 3)
+    cv2.line(middle, (10, 75), (170, 75), True, 3)
+    image[upper | middle | fragment] = 0
+    predictions = [
+        {"mask": upper, "score": 0.9, "panel": 1, "bbox": [0, 0, 180, 120]},
+        {"mask": middle | fragment, "score": 0.8, "panel": 1, "bbox": [0, 0, 180, 120]},
+    ]
+
+    assert local_regression_error(upper, fragment) < local_regression_error(middle, fragment)
+    cleaned, diagnostics = clean_prediction_tracks(predictions, 120, image)
+
+    assert np.all(cleaned[0]["mask"][fragment])
+    assert np.all(cleaned[1]["mask"][fragment] == 0)
+    assert diagnostics[0]["selection_mode"] == "regression"

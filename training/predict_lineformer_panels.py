@@ -180,6 +180,39 @@ def _mask_color(lab_image: np.ndarray | None, bgr_image: np.ndarray | None, mask
     return np.median(values.astype(np.float32), axis=0)
 
 
+def local_regression_error(track_mask: np.ndarray, component_mask: np.ndarray) -> float:
+    """Balanced local polynomial RMSE for a track joined with a component."""
+    track_x, track_y = mask_centerline(track_mask)
+    part_x, part_y = mask_centerline(component_mask)
+    if len(track_x) < 4 or len(part_x) < 2:
+        return float("inf")
+    span = max(1, int(part_x[-1]) - int(part_x[0]))
+    margin = max(20, span * 2)
+    local = (track_x >= part_x[0] - margin) & (track_x <= part_x[-1] + margin)
+    if np.count_nonzero(local) < 8:
+        distance = np.minimum(np.abs(track_x - part_x[0]), np.abs(track_x - part_x[-1]))
+        local_indices = np.argsort(distance)[:min(80, len(track_x))]
+        local_x, local_y = track_x[local_indices], track_y[local_indices]
+    else:
+        local_x, local_y = track_x[local], track_y[local]
+    # Equal total weight for the existing track and for the unknown component.
+    x = np.concatenate((local_x, part_x)).astype(np.float64)
+    y = np.concatenate((local_y, part_y)).astype(np.float64)
+    weights = np.concatenate((
+        np.full(len(local_x), 0.5 / max(1, len(local_x))),
+        np.full(len(part_x), 0.5 / max(1, len(part_x))),
+    ))
+    x_mean, x_scale = float(np.mean(x)), max(1.0, float(np.std(x)))
+    normalized_x = (x - x_mean) / x_scale
+    best = float("inf")
+    for degree in range(1, min(3, len(x) - 2) + 1):
+        coefficients = np.polyfit(normalized_x, y, degree, w=np.sqrt(weights))
+        residual = y - np.polyval(coefficients, normalized_x)
+        rmse = float(np.sqrt(np.sum(weights * residual ** 2)))
+        best = min(best, rmse)
+    return best
+
+
 def clean_prediction_tracks(
     predictions: list[dict], image_height: int, image: np.ndarray | None = None
 ) -> tuple[list[dict], list[dict]]:
@@ -220,11 +253,10 @@ def clean_prediction_tracks(
     # nearest curve is often the wrong one; a strong colour match may therefore
     # override a small geometric disadvantage.
     for component_item in components:
-        best_index = None
-        best_cost = float("inf")
         component = component_item["mask"]
         component_baseline = _track_baseline(component)
         component_color = _mask_color(lab_image, image, component)
+        candidates: list[dict] = []
         for track_index, track in enumerate(tracks):
             if track["panel"] != predictions[component_item["source"]]["panel"]:
                 continue
@@ -239,16 +271,38 @@ def clean_prediction_tracks(
             color_bridge = color_distance is not None and color_distance <= 20.0 and spatial_gap <= tolerance * 3.0
             if not normally_reachable and not color_bridge:
                 continue
-            color_cost = min(4.0, color_distance / 30.0) if color_distance is not None else 0.0
-            cost = geometry_cost + color_cost * 1.5
-            if cost < best_cost:
-                best_index, best_cost = track_index, cost
-        if best_index is not None:
+            candidates.append({
+                "index": track_index,
+                "geometry": geometry_cost,
+                "color": color_distance,
+                "regression": local_regression_error(track["mask"], component),
+            })
+        if candidates:
+            finite_colors = sorted(
+                candidate["color"] for candidate in candidates if candidate["color"] is not None
+            )
+            color_ambiguous = (
+                len(finite_colors) < 2 or finite_colors[1] - finite_colors[0] < 12.0
+            )
+            if color_ambiguous and len(candidates) > 1:
+                mode = "regression"
+                for candidate in candidates:
+                    candidate["cost"] = candidate["regression"] / tolerance + candidate["geometry"] * 0.15
+            else:
+                mode = "color"
+                for candidate in candidates:
+                    color_cost = min(4.0, candidate["color"] / 30.0) if candidate["color"] is not None else 0.0
+                    candidate["cost"] = candidate["geometry"] + color_cost * 1.5
+            best = min(candidates, key=lambda candidate: candidate["cost"])
+            best_index, best_cost = best["index"], best["cost"]
             tracks[best_index]["mask"] |= component
             diagnostics.append({
                 "from_prediction": component_item["source"] + 1,
                 "to_prediction": best_index + 1,
                 "normalized_cost": best_cost,
+                "selection_mode": mode,
+                "regression_rmse": best["regression"],
+                "color_distance": best["color"],
             })
 
     for track in tracks:
