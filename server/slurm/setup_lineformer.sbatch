@@ -20,7 +20,11 @@ WEIGHTS="$STORAGE/LineFormer_weights"
 if [[ ! -d "$ROOT/.git" ]]; then
   git clone https://github.com/TheJaeLal/LineFormer.git "$ROOT"
 fi
-python3.10 -m venv "$VENV"
+if [[ ! -x "$VENV/bin/python" ]]; then
+  BOOTSTRAP_PYTHON="$STORAGE/.venvs/maskdino/bin/python"
+  "$BOOTSTRAP_PYTHON" -m pip install virtualenv
+  "$BOOTSTRAP_PYTHON" -m virtualenv --python /usr/bin/python3.10 "$VENV"
+fi
 "$VENV/bin/pip" install --upgrade pip wheel 'setuptools<70'
 "$VENV/bin/pip" install \
   'torch==1.13.1+cu117' 'torchvision==0.14.1+cu117' \
