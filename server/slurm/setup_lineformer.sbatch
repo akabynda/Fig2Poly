@@ -20,7 +20,7 @@ WEIGHTS="$STORAGE/LineFormer_weights"
 if [[ ! -d "$ROOT/.git" ]]; then
   git clone https://github.com/TheJaeLal/LineFormer.git "$ROOT"
 fi
-if [[ ! -x "$VENV/bin/python" ]]; then
+if [[ ! -x "$VENV/bin/pip" ]]; then
   BOOTSTRAP_PYTHON="$STORAGE/.venvs/maskdino/bin/python"
   "$BOOTSTRAP_PYTHON" -m pip install virtualenv
   "$BOOTSTRAP_PYTHON" -m virtualenv --python /usr/bin/python3.10 "$VENV"
