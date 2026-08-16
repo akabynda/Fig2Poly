@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=maskdino_real
 #SBATCH --partition=aichem
+#SBATCH --nodelist=aihub
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
@@ -13,8 +14,8 @@ PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
 source "$PROJECT_ROOT/server/lib/common.sh"
 
 PY="$FIG2POLY_STORAGE/.venvs/maskdino/bin/python"
-RUN="$RUNS_ROOT/maskdino_r50_768_b8_e10_early"
-OUTPUT="$RUNS_ROOT/maskdino_r50_real_test_best"
+RUN="$RUNS_ROOT/maskdino_r50_lineex_balanced_v5"
+OUTPUT="$RUNS_ROOT/maskdino_r50_lineex_balanced_v5_real_test_best"
 
 "$PY" -m training.predict_maskdino \
   --maskdino-root "$MASKDINO_ROOT" \
