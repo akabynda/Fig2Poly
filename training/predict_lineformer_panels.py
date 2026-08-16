@@ -167,8 +167,21 @@ def _track_baseline(mask: np.ndarray) -> float:
     return float(np.median(ys)) if len(ys) else float("nan")
 
 
+def _mask_color(lab_image: np.ndarray | None, bgr_image: np.ndarray | None, mask: np.ndarray) -> np.ndarray | None:
+    if lab_image is None or bgr_image is None or not np.any(mask):
+        return None
+    pixels = bgr_image[mask]
+    # Ignore white antialiased background captured by a thick predicted mask.
+    chroma = pixels.max(axis=1).astype(np.int16) - pixels.min(axis=1).astype(np.int16)
+    useful = (chroma >= 12) | (pixels.max(axis=1) <= 190)
+    values = lab_image[mask][useful]
+    if len(values) < 5:
+        values = lab_image[mask]
+    return np.median(values.astype(np.float32), axis=0)
+
+
 def clean_prediction_tracks(
-    predictions: list[dict], image_height: int
+    predictions: list[dict], image_height: int, image: np.ndarray | None = None
 ) -> tuple[list[dict], list[dict]]:
     """Keep one coherent curve track per query and reassign leaked fragments.
 
@@ -178,8 +191,9 @@ def clean_prediction_tracks(
     components may be reassigned to a better query from the same plot panel.
     """
     tolerance = max(4.0, image_height * 0.008)
+    lab_image = cv2.cvtColor(image, cv2.COLOR_BGR2LAB) if image is not None else None
     tracks: list[dict] = []
-    orphans: list[dict] = []
+    components: list[dict] = []
     diagnostics: list[dict] = []
     for source_index, item in enumerate(predictions):
         mask = item["mask"].astype(np.uint8)
@@ -195,42 +209,50 @@ def clean_prediction_tracks(
             if int(stats[idx, cv2.CC_STAT_AREA]) >= max(4, int(largest_area * 0.002))
         ]
         primary = labels == component_ids[0]
-        primary_baseline = _track_baseline(primary)
-        distance = cv2.distanceTransform((~primary).astype(np.uint8), cv2.DIST_L2, 5)
         for component_id in component_ids[1:]:
             component = labels == component_id
-            component_baseline = _track_baseline(component)
-            spatial_gap = float(distance[component].min())
-            level_gap = abs(component_baseline - primary_baseline)
-            if spatial_gap <= tolerance or level_gap <= tolerance * 2.5:
-                primary |= component
-            else:
-                orphans.append({"mask": component, "source": source_index})
+            components.append({"mask": component, "source": source_index})
         cleaned = {**item, "mask": primary}
+        cleaned["track_color"] = _mask_color(lab_image, image, primary)
         tracks.append(cleaned)
 
-    for orphan in orphans:
+    # Assign every non-anchor connected component globally. At a T-junction the
+    # nearest curve is often the wrong one; a strong colour match may therefore
+    # override a small geometric disadvantage.
+    for component_item in components:
         best_index = None
         best_cost = float("inf")
-        orphan_baseline = _track_baseline(orphan["mask"])
+        component = component_item["mask"]
+        component_baseline = _track_baseline(component)
+        component_color = _mask_color(lab_image, image, component)
         for track_index, track in enumerate(tracks):
-            if track_index == orphan["source"] or track["panel"] != predictions[orphan["source"]]["panel"]:
+            if track["panel"] != predictions[component_item["source"]]["panel"]:
                 continue
             distance = cv2.distanceTransform((~track["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
-            spatial_gap = float(distance[orphan["mask"]].min())
-            level_gap = abs(orphan_baseline - _track_baseline(track["mask"]))
-            cost = min(spatial_gap / tolerance, level_gap / (tolerance * 2.5))
+            spatial_gap = float(distance[component].min())
+            level_gap = abs(component_baseline - _track_baseline(track["mask"]))
+            geometry_cost = min(spatial_gap / tolerance, level_gap / (tolerance * 2.5))
+            color_distance = None
+            if component_color is not None and track["track_color"] is not None:
+                color_distance = float(np.linalg.norm(component_color - track["track_color"]))
+            normally_reachable = geometry_cost <= 1.0
+            color_bridge = color_distance is not None and color_distance <= 20.0 and spatial_gap <= tolerance * 3.0
+            if not normally_reachable and not color_bridge:
+                continue
+            color_cost = min(4.0, color_distance / 30.0) if color_distance is not None else 0.0
+            cost = geometry_cost + color_cost * 1.5
             if cost < best_cost:
                 best_index, best_cost = track_index, cost
-        if best_index is not None and best_cost <= 1.0:
-            tracks[best_index]["mask"] |= orphan["mask"]
+        if best_index is not None:
+            tracks[best_index]["mask"] |= component
             diagnostics.append({
-                "from_prediction": orphan["source"] + 1,
+                "from_prediction": component_item["source"] + 1,
                 "to_prediction": best_index + 1,
                 "normalized_cost": best_cost,
             })
 
     for track in tracks:
+        track.pop("track_color", None)
         ys, xs = np.nonzero(track["mask"])
         if len(xs):
             track["bbox"] = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
@@ -281,10 +303,19 @@ def suppress_centerline_duplicates(
         if duplicate_of is None:
             kept.append(candidate)
         else:
+            new_pixels = int(np.count_nonzero(candidate["mask"] & ~duplicate_of["mask"]))
+            duplicate_of["mask"] |= candidate["mask"]
+            duplicate_of["centerline"] = mask_centerline(duplicate_of["mask"])
+            ys, xs = np.nonzero(duplicate_of["mask"])
+            if len(xs):
+                duplicate_of["bbox"] = [
+                    float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)
+                ]
             suppressed.append({
                 "panel": candidate["panel"],
                 "score": candidate["score"],
                 "kept_score": duplicate_of["score"],
+                "merged_unique_pixels": new_pixels,
                 **duplicate_metrics,
             })
     return kept, suppressed
@@ -364,7 +395,7 @@ def main() -> int:
         minimum_threshold = min(args.thresholds)
         predictions = [item for item in predictions if item["score"] >= minimum_threshold]
         raw_count = len(predictions)
-        predictions, reassigned = clean_prediction_tracks(predictions, height)
+        predictions, reassigned = clean_prediction_tracks(predictions, height, image)
         predictions, suppressed = suppress_centerline_duplicates(predictions, height)
         image_dir = args.output.resolve() / image_path.stem
         image_dir.mkdir(parents=True, exist_ok=True)

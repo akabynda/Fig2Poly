@@ -64,6 +64,20 @@ def test_centerline_nms_removes_duplicate_but_keeps_stacked_curve() -> None:
     assert suppressed[0]["score"] == 0.6
 
 
+def test_centerline_nms_fuses_unique_pixels_from_duplicate_query() -> None:
+    best = prediction(30, 0.9)
+    duplicate = prediction(31, 0.6)
+    extension = np.zeros_like(best["mask"])
+    cv2.line(extension, (165, 32), (175, 34), True, 3)
+    duplicate["mask"] |= extension
+
+    kept, suppressed = suppress_centerline_duplicates([best, duplicate], 120)
+
+    assert len(kept) == 1
+    assert np.all(kept[0]["mask"][extension])
+    assert suppressed[0]["merged_unique_pixels"] > 0
+
+
 def test_centerline_duplicate_requires_same_panel() -> None:
     first, second = prediction(30, 0.9, 1), prediction(30, 0.8, 2)
     first["centerline"] = mask_centerline(first["mask"])
@@ -91,3 +105,20 @@ def test_centerline_cleanup_reassigns_leaked_neighbouring_curve_fragments() -> N
     assert np.all(cleaned[1]["mask"][upper_leak])
     assert np.all(cleaned[1]["mask"][lower_leak] == 0)
     assert len(reassigned) == 2
+
+
+def test_color_resolves_curve_ownership_at_nearby_junction() -> None:
+    image = np.full((120, 180, 3), 255, dtype=np.uint8)
+    upper = prediction(30, 0.9)
+    middle = prediction(75, 0.8)
+    branch = np.zeros_like(upper["mask"])
+    cv2.line(branch, (82, 35), (82, 69), True, 2)
+    middle["mask"] |= branch
+    image[upper["mask"]] = (30, 30, 220)
+    image[branch] = (30, 30, 220)
+    image[middle["mask"] & ~branch] = (220, 70, 30)
+
+    cleaned, _ = clean_prediction_tracks([upper, middle], 120, image)
+
+    assert np.all(cleaned[0]["mask"][branch])
+    assert np.all(cleaned[1]["mask"][branch] == 0)
