@@ -151,6 +151,145 @@ def detect_plot_boxes(image: np.ndarray) -> list[tuple[int, int, int, int]]:
     return selected if len(selected) >= 2 else [(0, 0, width, height)]
 
 
+def mask_centerline(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    xs: list[int] = []
+    ys: list[float] = []
+    for x in range(mask.shape[1]):
+        column = np.flatnonzero(mask[:, x])
+        if column.size:
+            xs.append(x)
+            ys.append(float(np.median(column)))
+    return np.asarray(xs, dtype=np.int32), np.asarray(ys, dtype=np.float32)
+
+
+def _track_baseline(mask: np.ndarray) -> float:
+    _, ys = mask_centerline(mask)
+    return float(np.median(ys)) if len(ys) else float("nan")
+
+
+def clean_prediction_tracks(
+    predictions: list[dict], image_height: int
+) -> tuple[list[dict], list[dict]]:
+    """Keep one coherent curve track per query and reassign leaked fragments.
+
+    LineFormer occasionally puts disconnected pieces of two neighbouring curves in
+    one query. The largest connected component anchors the query. Components close
+    to that anchor in image space or in their typical y-level stay with it; remaining
+    components may be reassigned to a better query from the same plot panel.
+    """
+    tolerance = max(4.0, image_height * 0.008)
+    tracks: list[dict] = []
+    orphans: list[dict] = []
+    diagnostics: list[dict] = []
+    for source_index, item in enumerate(predictions):
+        mask = item["mask"].astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+        component_ids = sorted(
+            range(1, count), key=lambda idx: int(stats[idx, cv2.CC_STAT_AREA]), reverse=True
+        )
+        if not component_ids:
+            continue
+        largest_area = int(stats[component_ids[0], cv2.CC_STAT_AREA])
+        component_ids = [
+            idx for idx in component_ids
+            if int(stats[idx, cv2.CC_STAT_AREA]) >= max(4, int(largest_area * 0.002))
+        ]
+        primary = labels == component_ids[0]
+        primary_baseline = _track_baseline(primary)
+        distance = cv2.distanceTransform((~primary).astype(np.uint8), cv2.DIST_L2, 5)
+        for component_id in component_ids[1:]:
+            component = labels == component_id
+            component_baseline = _track_baseline(component)
+            spatial_gap = float(distance[component].min())
+            level_gap = abs(component_baseline - primary_baseline)
+            if spatial_gap <= tolerance or level_gap <= tolerance * 2.5:
+                primary |= component
+            else:
+                orphans.append({"mask": component, "source": source_index})
+        cleaned = {**item, "mask": primary}
+        tracks.append(cleaned)
+
+    for orphan in orphans:
+        best_index = None
+        best_cost = float("inf")
+        orphan_baseline = _track_baseline(orphan["mask"])
+        for track_index, track in enumerate(tracks):
+            if track_index == orphan["source"] or track["panel"] != predictions[orphan["source"]]["panel"]:
+                continue
+            distance = cv2.distanceTransform((~track["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
+            spatial_gap = float(distance[orphan["mask"]].min())
+            level_gap = abs(orphan_baseline - _track_baseline(track["mask"]))
+            cost = min(spatial_gap / tolerance, level_gap / (tolerance * 2.5))
+            if cost < best_cost:
+                best_index, best_cost = track_index, cost
+        if best_index is not None and best_cost <= 1.0:
+            tracks[best_index]["mask"] |= orphan["mask"]
+            diagnostics.append({
+                "from_prediction": orphan["source"] + 1,
+                "to_prediction": best_index + 1,
+                "normalized_cost": best_cost,
+            })
+
+    for track in tracks:
+        ys, xs = np.nonzero(track["mask"])
+        if len(xs):
+            track["bbox"] = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
+    return tracks, diagnostics
+
+
+def centerlines_are_duplicates(
+    first: dict,
+    second: dict,
+    image_height: int,
+    min_overlap: float = 0.65,
+    distance_ratio: float = 0.008,
+) -> tuple[bool, dict[str, float]]:
+    if first["panel"] != second["panel"]:
+        return False, {}
+    x1, y1 = first["centerline"]
+    x2, y2 = second["centerline"]
+    common = np.intersect1d(x1, x2, assume_unique=True)
+    overlap = len(common) / max(1, min(len(x1), len(x2)))
+    if overlap < min_overlap or not len(common):
+        return False, {"x_overlap": float(overlap)}
+    distances = np.abs(np.interp(common, x1, y1) - np.interp(common, x2, y2))
+    median = float(np.median(distances))
+    p90 = float(np.percentile(distances, 90))
+    tolerance = max(3.0, image_height * distance_ratio)
+    duplicate = median <= tolerance and p90 <= tolerance * 2.0
+    return duplicate, {
+        "x_overlap": float(overlap), "median_distance": median,
+        "p90_distance": p90, "tolerance": tolerance,
+    }
+
+
+def suppress_centerline_duplicates(
+    predictions: list[dict], image_height: int
+) -> tuple[list[dict], list[dict]]:
+    for item in predictions:
+        item["centerline"] = mask_centerline(item["mask"])
+    kept: list[dict] = []
+    suppressed: list[dict] = []
+    for candidate in sorted(predictions, key=lambda item: item["score"], reverse=True):
+        duplicate_of = None
+        duplicate_metrics: dict[str, float] = {}
+        for existing in kept:
+            duplicate, metrics = centerlines_are_duplicates(candidate, existing, image_height)
+            if duplicate:
+                duplicate_of, duplicate_metrics = existing, metrics
+                break
+        if duplicate_of is None:
+            kept.append(candidate)
+        else:
+            suppressed.append({
+                "panel": candidate["panel"],
+                "score": candidate["score"],
+                "kept_score": duplicate_of["score"],
+                **duplicate_metrics,
+            })
+    return kept, suppressed
+
+
 def render_threshold(
     image: np.ndarray,
     predictions: list[dict],
@@ -164,6 +303,8 @@ def render_threshold(
     curves_only = np.full_like(image, 255)
     instance_ids = np.zeros((height, width), dtype=np.uint16)
     output.mkdir(parents=True, exist_ok=True)
+    for stale_mask in output.glob("mask_*.png"):
+        stale_mask.unlink()
     records = []
     for index, item in enumerate(kept, 1):
         mask = item["mask"]
@@ -220,15 +361,29 @@ def main() -> int:
                 predictions.append({"score": float(box[4]), "mask": mask, "panel": panel_index,
                                     "bbox": [float(box[0] + x1), float(box[1] + y1),
                                              float(box[2] + x1), float(box[3] + y1)]})
+        minimum_threshold = min(args.thresholds)
+        predictions = [item for item in predictions if item["score"] >= minimum_threshold]
+        raw_count = len(predictions)
+        predictions, reassigned = clean_prediction_tracks(predictions, height)
+        predictions, suppressed = suppress_centerline_duplicates(predictions, height)
         image_dir = args.output.resolve() / image_path.stem
         image_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(image_dir / "panels.png"), panel_view)
+        (image_dir / "centerline_suppressed.json").write_text(
+            json.dumps(suppressed, indent=2), encoding="utf-8"
+        )
+        (image_dir / "centerline_reassigned.json").write_text(
+            json.dumps(reassigned, indent=2), encoding="utf-8"
+        )
         counts = {}
         for threshold in args.thresholds:
             label = f"threshold_{threshold:.2f}"
             counts[label] = render_threshold(image, predictions, threshold, image_dir / label)
-        summary.append({"image": image_path.name, "panels": len(boxes), "boxes_xyxy": boxes, "counts": counts})
-        print(f"{image_path.name}: {len(boxes)} panels; {counts}", flush=True)
+        summary.append({"image": image_path.name, "panels": len(boxes), "boxes_xyxy": boxes,
+                        "raw_predictions": raw_count, "centerline_reassigned": len(reassigned),
+                        "centerline_suppressed": len(suppressed),
+                        "counts": counts})
+        print(f"{image_path.name}: {len(boxes)} panels; suppressed={len(suppressed)}; {counts}", flush=True)
     args.output.resolve().mkdir(parents=True, exist_ok=True)
     (args.output.resolve() / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return 0
