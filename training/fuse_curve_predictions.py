@@ -160,7 +160,8 @@ def fuse_panel(
 
 
 def add_complex_lineformer_rescues(
-    fused: list[dict], high_confidence: list[dict], low_confidence: list[dict], image_height: int
+    fused: list[dict], high_confidence: list[dict], low_confidence: list[dict],
+    maskdino: list[dict], image_height: int,
 ) -> tuple[list[dict], list[dict]]:
     """Recover low-score, peak-rich LineFormer curves without admitting flat clutter."""
     rescued: list[dict] = []
@@ -198,18 +199,51 @@ def add_complex_lineformer_rescues(
             and coverage >= 0.25
             and vertical_excursion >= max(6.0, image_height * 0.006)
         )
+        maskdino_matches = []
+        if not duplicate:
+            for maskdino_candidate in maskdino:
+                matched, metrics = curves_match(candidate, maskdino_candidate, image_height)
+                maskdino_duplicate = any(
+                    item["panel"] == maskdino_candidate["panel"]
+                    and centerline_distance(maskdino_candidate, item)["overlap"] >= 0.5
+                    and centerline_distance(maskdino_candidate, item)["median"]
+                    <= max(5.0, image_height * 0.02)
+                    for item in fused
+                )
+                if matched and not maskdino_duplicate:
+                    maskdino_matches.append((maskdino_candidate, metrics))
+        # Cross-model agreement is stronger evidence than morphology alone. Use
+        # MaskDINO as the backbone here so a peak absent from LineFormer survives.
+        cross_model_match = min(
+            maskdino_matches, key=lambda item: item[1]["median"], default=None
+        )
+        accepted = accepted or cross_model_match is not None
         diagnostics.append({
             "candidate_id": candidate["id"], "panel": candidate["panel"],
             "score": candidate["score"], "horizontal_coverage": coverage,
             "vertical_excursion": vertical_excursion, "duplicate": duplicate,
-            "action": "rescue" if accepted else "reject",
+            "action": (
+                "cross_model_rescue" if cross_model_match is not None
+                else "rescue" if accepted else "reject"
+            ),
         })
         if accepted:
-            rescued.append({
-                **candidate,
-                "source": "lineformer",
-                "reason": "low_confidence_complex_lineformer_rescue",
-            })
+            if cross_model_match is not None:
+                maskdino_candidate, _ = cross_model_match
+                rescued.append({
+                    **maskdino_candidate,
+                    "mask": guided_union(
+                        maskdino_candidate["mask"], candidate["mask"], image_height
+                    ),
+                    "source": "maskdino+lineformer",
+                    "reason": "low_confidence_cross_model_rescue",
+                })
+            else:
+                rescued.append({
+                    **candidate,
+                    "source": "lineformer",
+                    "reason": "low_confidence_complex_lineformer_rescue",
+                })
     return fused + rescued, diagnostics
 
 
@@ -305,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             fused.extend(panel_tracks)
             diagnostics.append({"panel": panel, **panel_diagnostics})
         fused, rescue_diagnostics = add_complex_lineformer_rescues(
-            fused, lineformer, lineformer_low, image.shape[0]
+            fused, lineformer, lineformer_low, maskdino, image.shape[0]
         )
         image_output = args.output.resolve() / image_path.stem
         render(image, fused, image_output)

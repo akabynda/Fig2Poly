@@ -73,9 +73,25 @@ def test_low_confidence_rescue_requires_peak_rich_curve() -> None:
     flat_clutter = track(2, [85] * 80, "lineformer", score=0.2)
 
     fused, diagnostics = add_complex_lineformer_rescues(
-        [], [], [peak_rich, flat_clutter], image_height=100
+        [], [], [peak_rich, flat_clutter], [], image_height=100
     )
 
     assert len(fused) == 1
     assert fused[0]["id"] == 1
     assert [item["action"] for item in diagnostics] == ["rescue", "reject"]
+
+
+def test_cross_model_rescue_preserves_maskdino_peak() -> None:
+    maskdino_y = [60] * 80
+    maskdino_y[38:43] = [55, 42, 20, 42, 55]
+    maskdino = track(7, maskdino_y, "maskdino", score=0.8)
+    weak_lineformer = track(3, [60] * 80, "lineformer", score=0.2)
+
+    fused, diagnostics = add_complex_lineformer_rescues(
+        [], [], [weak_lineformer], [maskdino], image_height=100
+    )
+
+    assert len(fused) == 1
+    assert fused[0]["reason"] == "low_confidence_cross_model_rescue"
+    assert diagnostics[0]["action"] == "cross_model_rescue"
+    assert fused[0]["mask"][20, 50]
