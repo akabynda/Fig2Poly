@@ -324,7 +324,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
         },
         "score_6a_6b": "Official LineFormer/ChartInfo continuous-line formula; 6b pads count mismatches",
-        "real_test_note": "No pixel/curve GT; score_6a/score_6b and mask metrics intentionally blank",
+        "balanced_v5_test_note": (
+            "Full 40,000-image held-out test split from combined_lineex_balanced_v5; "
+            "instance masks and source points enable the complete metric suite"
+        ),
     }, indent=2), encoding="utf-8")
     lineformer_store.close()
     maskdino_store.close()

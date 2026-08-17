@@ -24,4 +24,4 @@ record_run_metadata "$OUTPUT"
   --dataset "lineex=manifest=$DATA_ROOT/public_lineex_100k_v5/val.jsonl" \
   --dataset "ub_pmc22=manifest=$DATA_ROOT/lineformer_benchmarks/ub_pmc22_line_only/test.jsonl" \
   --dataset "adobe_synth19=manifest=$DATA_ROOT/lineformer_benchmarks/adobe_synth19/test.jsonl" \
-  --dataset "real_test=images=$PROJECT_ROOT/real_test"
+  --dataset "balanced_v5_test=manifest=$DATA_ROOT/combined_lineex_balanced_v5/test.jsonl"
