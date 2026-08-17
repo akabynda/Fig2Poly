@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import paramiko
 
@@ -45,9 +46,9 @@ def main() -> int:
     out = stdout.read().decode("utf-8", errors="replace")
     err = stderr.read().decode("utf-8", errors="replace")
     if out:
-        print(out, end="")
+        sys.stdout.buffer.write(out.encode("utf-8", errors="replace"))
     if err:
-        print(err, end="", file=__import__("sys").stderr)
+        sys.stderr.buffer.write(err.encode("utf-8", errors="replace"))
     status = stdout.channel.recv_exit_status()
     target.close()
     gateway.close()

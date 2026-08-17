@@ -18,6 +18,7 @@ OUT="$DATA_ROOT/lineformer_benchmarks"
 "$PY" -m training.download_public_benchmarks \
   --root "$RAW" \
   --datasets ub_pmc22,adobe_synth19 \
+  --asset-splits test \
   --extract \
   --delete-archives
 

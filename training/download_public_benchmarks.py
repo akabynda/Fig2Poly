@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default="datasets/public")
     parser.add_argument("--datasets", default="ub_pmc22,lineex,adobe_synth19")
+    parser.add_argument(
+        "--asset-splits",
+        help="Comma-separated released asset groups to fetch (for example: test)",
+    )
     parser.add_argument("--extract", action="store_true")
     parser.add_argument("--delete-archives", action="store_true")
     args = parser.parse_args(argv)
@@ -201,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     log_path = root / "download.log"
     selected = {item.strip() for item in args.datasets.split(",") if item.strip()}
     assets = [asset for asset in ASSETS if asset.dataset in selected]
+    if args.asset_splits:
+        selected_splits = {
+            item.strip() for item in args.asset_splits.split(",") if item.strip()
+        }
+        assets = [asset for asset in assets if asset.split in selected_splits]
     manifest = {"started": time.time(), "assets": []}
     adobe_line_stems: set[str] | None = None
     pending_adobe_image_receipts: list[tuple[Path, dict]] = []
