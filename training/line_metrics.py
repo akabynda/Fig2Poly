@@ -26,6 +26,10 @@ def continuous_line_score(prediction: np.ndarray, target: np.ndarray) -> float:
     prediction = prediction[np.argsort(prediction[:, 0])]
     target = target[np.argsort(target[:, 0])]
 
+    # The released ChartInfo/LineFormer implementation derives epsilon from
+    # the GT series once and reuses it for both recall and precision.
+    epsilon = max(1e-12, float(np.ptp(target[:, 1])) / 100)
+
     def weighted_recall(reference: np.ndarray, candidate: np.ndarray) -> float:
         if len(reference) == 1:
             intervals = np.ones(1, dtype=np.float64)
@@ -36,7 +40,6 @@ def continuous_line_score(prediction: np.ndarray, target: np.ndarray) -> float:
             if len(reference) > 2:
                 intervals[1:-1] = (reference[2:, 0] - reference[:-2, 0]) / 2
             intervals = np.maximum(intervals, 0)
-        epsilon = max(1e-6, float(np.ptp(reference[:, 1])) / 100)
         interpolated = np.interp(reference[:, 0], candidate[:, 0], candidate[:, 1])
         relative_error = np.minimum(
             1.0,
