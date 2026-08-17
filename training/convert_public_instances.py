@@ -26,9 +26,10 @@ def normalized_chart_type(annotation: dict) -> str | None:
     return str(chart_type).strip().lower().replace("_", " ").replace("-", " ")
 
 
-def is_chartinfo_line(annotation: dict) -> bool:
+def is_chartinfo_line(annotation: dict, chart_types: set[str] | None = None) -> bool:
     chart_type = normalized_chart_type(annotation)
-    return chart_type in (None, "line", "scatter line") and bool(chartinfo_lines(annotation))
+    accepted = chart_types if chart_types is not None else {"line", "scatter line"}
+    return (chart_type is None or chart_type in accepted) and bool(chartinfo_lines(annotation))
 
 
 def eligible_chartinfo_stems(annotation_root: Path) -> set[str]:
@@ -44,6 +45,7 @@ def find_chartinfo_pairs(
     raw_root: Path,
     annotation_path_contains: str | None = None,
     annotation_root: Path | None = None,
+    chart_types: set[str] | None = None,
 ) -> list[tuple[Path, Path]]:
     if annotation_root is not None:
         search_root = annotation_root
@@ -66,7 +68,7 @@ def find_chartinfo_pairs(
     eligible_annotations = []
     for path in annotations:
         annotation = json.loads(path.read_text(encoding="utf-8"))
-        if is_chartinfo_line(annotation):
+        if is_chartinfo_line(annotation, chart_types):
             eligible_annotations.append(path)
     required = {path.stem for path in eligible_annotations}
     image_index: dict[str, Path] = {}
@@ -250,8 +252,11 @@ def convert_chartinfo(
     limit: int | None,
     annotation_path_contains: str | None = None,
     annotation_root: Path | None = None,
+    chart_types: set[str] | None = None,
 ) -> dict:
-    pairs = find_chartinfo_pairs(raw_root, annotation_path_contains, annotation_root)
+    pairs = find_chartinfo_pairs(
+        raw_root, annotation_path_contains, annotation_root, chart_types
+    )
     if limit is not None:
         pairs = pairs[:limit]
     existing = existing_sample_ids(output)
@@ -464,6 +469,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--annotation-path-contains")
     parser.add_argument("--annotation-root")
+    parser.add_argument(
+        "--chart-types",
+        help="Comma-separated normalized ChartInfo types; default: line and scatter-line",
+    )
     args = parser.parse_args(argv)
     if args.format == "lineex":
         result = convert_lineex(
@@ -484,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             args.limit,
             args.annotation_path_contains,
             Path(args.annotation_root).resolve() if args.annotation_root else None,
+            ({item.strip().lower().replace("-", " ") for item in args.chart_types.split(",")}
+             if args.chart_types else None),
         )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

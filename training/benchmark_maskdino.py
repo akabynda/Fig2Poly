@@ -44,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
     model = train_net.Trainer.build_model(cfg)
     model.eval()
     DetectionCheckpointer(model).load(cfg.MODEL.WEIGHTS)
-    transform = T.ResizeShortestEdge([cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST)
+    transform = T.ResizeShortestEdge(
+        [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
+    )
 
     def infer(image: np.ndarray, threshold: float) -> list[dict]:
         height, width = image.shape[:2]

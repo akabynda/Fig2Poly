@@ -13,6 +13,8 @@ def test_prediction_store_round_trip(tmp_path):
     path = tmp_path / "predictions.sqlite"
     store = PredictionStore(path)
     store.put("set", sample, 11, 7, [prediction], [prediction], 1.0, 1.5, 0.2, 2)
+    store.close()
+    store = PredictionStore(path, writable=False)
     restored, metadata = store.get("set", "one", "processed", "lineformer")
     store.close()
     assert len(restored) == 1

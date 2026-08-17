@@ -25,23 +25,23 @@ OUT="$DATA_ROOT/lineformer_benchmarks"
 # The paper evaluates UB-PMC22 on the official test release (158 line charts).
 "$PY" -m training.convert_public_instances \
   --format chartinfo \
-  --raw-root "$RAW/raw/ub_pmc22" \
-  --output "$OUT/ub_pmc22" \
+  --raw-root "$RAW/raw/ub_pmc22/ICPR2022_CHARTINFO_UB_UNITEC_PMC_TEST_v2.1" \
+  --output "$OUT/ub_pmc22_line_only" \
   --dataset-name ub_pmc22 \
   --official-split test \
-  --annotation-path-contains test \
+  --chart-types line \
   --line-width 3
 
 # Adobe test annotations and the image shards are extracted under the same
 # root. Restrict pairing to the official Task-6 ground-truth directory.
-ADOBE="$RAW/raw/adobe_synth19"
+ADOBE="$RAW/raw/adobe_synth19/test_release/task6"
 "$PY" -m training.convert_public_instances \
   --format chartinfo \
   --raw-root "$ADOBE" \
   --output "$OUT/adobe_synth19" \
   --dataset-name adobe_synth19 \
   --official-split test \
-  --annotation-root "$ADOBE/test_release/task6/gt_json" \
+  --annotation-root "$ADOBE/gt_json" \
   --line-width 3
 
 wc -l "$OUT/ub_pmc22/test.jsonl" "$OUT/adobe_synth19/test.jsonl"

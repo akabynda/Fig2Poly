@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tarfile
 
-from training.convert_public_instances import eligible_chartinfo_stems
+from training.convert_public_instances import eligible_chartinfo_stems, is_chartinfo_line
 from training.download_public_benchmarks import safe_extract
 
 
@@ -53,3 +53,8 @@ def test_adobe_selection_and_filtered_extraction(tmp_path: Path) -> None:
     assert (output / "images" / "12.png").is_file()
     assert not (output / "images" / "11.png").exists()
     assert not (output / "images" / "._10.png").exists()
+
+
+def test_exact_line_filter_excludes_scatter_line() -> None:
+    assert is_chartinfo_line(annotation("Line"), {"line"})
+    assert not is_chartinfo_line(annotation("Scatter-line"), {"line"})

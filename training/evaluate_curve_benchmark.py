@@ -28,6 +28,12 @@ VARIANTS = (
     "maskdino_lineformer",
 )
 
+PAPER_REFERENCE = (
+    {"dataset": "adobe_synth19", "variant": "lineformer_paper_reported", "score_6a": 0.9751, "score_6b": 0.9702},
+    {"dataset": "ub_pmc22", "variant": "lineformer_paper_reported", "score_6a": 0.9310, "score_6b": 0.8825},
+    {"dataset": "lineex", "variant": "lineformer_paper_reported", "score_6a": 0.9920, "score_6b": 0.9757},
+)
+
 
 def mask_to_official_points(mask: np.ndarray, interval: int = 10) -> np.ndarray:
     """Reproduce LineFormer's mask -> center points -> linear interpolation."""
@@ -241,9 +247,11 @@ def main(argv: list[str] | None = None) -> int:
     lineformer_store = PredictionStore(args.lineformer_db, writable=False)
     maskdino_store = PredictionStore(args.maskdino_db, writable=False)
     rows: list[dict] = []
+    dataset_counts: dict[str, int] = {}
     for dataset, path, kind in args.dataset:
         samples = iter_manifest(path) if kind == "manifest" else iter_image_directory(path, counts)
         for sample in samples:
+            dataset_counts[dataset] = dataset_counts.get(dataset, 0) + 1
             sample_id = str(sample["id"])
             lf_raw, lf_meta = lineformer_store.get(dataset, sample_id, "raw", "lineformer")
             lf_post, _ = lineformer_store.get(dataset, sample_id, "processed", "lineformer")
@@ -288,9 +296,33 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     write_csv(output / "per_image_metrics.csv", rows)
     write_csv(output / "summary_metrics.csv", summarize(rows))
+    write_csv(output / "paper_reference_metrics.csv", [
+        {
+            **row,
+            "split": "paper-reported split",
+            "source": "Lal et al., LineFormer, ICDAR 2023",
+            "doi": "10.1007/978-3-031-41734-4_24",
+            "note": (
+                "Values reported by the paper; not recomputed by this run. "
+                "For UB-PMC22 the paper's 158-image filename manifest is not public."
+            ),
+        }
+        for row in PAPER_REFERENCE
+    ])
     (output / "protocol.json").write_text(json.dumps({
         "threshold": args.threshold, "rescue_threshold": args.rescue_threshold,
         "variants": VARIANTS,
+        "dataset_image_counts": dataset_counts,
+        "dataset_notes": {
+            "lineex": "Official released validation split (10,000), used as test by the LineFormer config.",
+            "adobe_synth19": "Official CHART-Info-19 Task-6 test release.",
+            "ub_pmc22": (
+                "Complete public ICPR2022 UB/UNITEC PMC TEST v2.1 line subset. "
+                "It has 397 usable line charts; the paper reports a 158-image test "
+                "but does not publish that exact filename manifest, so its reported "
+                "93.10/88.25 values are reference-only rather than directly paired."
+            ),
+        },
         "score_6a_6b": "Official LineFormer/ChartInfo continuous-line formula; 6b pads count mismatches",
         "real_test_note": "No pixel/curve GT; score_6a/score_6b and mask metrics intentionally blank",
     }, indent=2), encoding="utf-8")

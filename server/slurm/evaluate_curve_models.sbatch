@@ -21,8 +21,10 @@ OUTPUT="$RUNS_ROOT/curve_model_benchmark_v1"
   --rescue-threshold 0.15 \
   --real-test-counts "$PROJECT_ROOT/configs/real_test_counts.json" \
   --dataset "lineex=manifest=$DATA_ROOT/public_lineex_100k_v5/val.jsonl" \
-  --dataset "ub_pmc22=manifest=$DATA_ROOT/lineformer_benchmarks/ub_pmc22/test.jsonl" \
+  --dataset "ub_pmc22=manifest=$DATA_ROOT/lineformer_benchmarks/ub_pmc22_line_only/test.jsonl" \
   --dataset "adobe_synth19=manifest=$DATA_ROOT/lineformer_benchmarks/adobe_synth19/test.jsonl" \
   --dataset "real_test=images=$PROJECT_ROOT/real_test"
 
-ls -lh "$OUTPUT/csv/per_image_metrics.csv" "$OUTPUT/csv/summary_metrics.csv"
+ls -lh "$OUTPUT/csv/per_image_metrics.csv" \
+  "$OUTPUT/csv/summary_metrics.csv" \
+  "$OUTPUT/csv/paper_reference_metrics.csv"
