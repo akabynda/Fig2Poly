@@ -31,3 +31,13 @@ def test_prediction_store_handles_empty_predictions(tmp_path):
     restored, _ = store.get("set", "empty", "raw", "maskdino")
     store.close()
     assert restored == []
+
+
+def test_prediction_store_retries_errors(tmp_path):
+    path = tmp_path / "retry.sqlite"
+    store = PredictionStore(path)
+    sample = {"id": "failed", "image_path": "/data/failed.png"}
+    store.put("set", sample, 5, 4, None, None, 0, 0, 0, 0, "IndexError")
+
+    assert "failed" not in store.completed("set")
+    store.close()

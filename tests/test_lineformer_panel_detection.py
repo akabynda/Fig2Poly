@@ -151,3 +151,17 @@ def test_local_regression_resolves_same_color_curve_fragment() -> None:
     assert np.all(cleaned[0]["mask"][fragment])
     assert np.all(cleaned[1]["mask"][fragment] == 0)
     assert diagnostics[0]["selection_mode"] == "regression"
+
+
+def test_clean_prediction_tracks_discards_subminimum_mask() -> None:
+    mask = np.zeros((20, 30), dtype=bool)
+    mask[4, 5] = True
+    mask[12, 18] = True
+    prediction_item = {
+        "mask": mask, "score": 0.2, "panel": 1, "bbox": [5, 4, 19, 13]
+    }
+
+    cleaned, diagnostics = clean_prediction_tracks([prediction_item], 20)
+
+    assert cleaned == []
+    assert diagnostics == []

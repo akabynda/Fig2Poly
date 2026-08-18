@@ -91,7 +91,7 @@ class PredictionStore:
 
     def completed(self, dataset: str) -> set[str]:
         rows = self.connection.execute(
-            "SELECT sample_id FROM predictions WHERE dataset=?", (dataset,)
+            "SELECT sample_id FROM predictions WHERE dataset=? AND error IS NULL", (dataset,)
         )
         return {str(row[0]) for row in rows}
 

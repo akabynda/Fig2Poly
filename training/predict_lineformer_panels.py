@@ -241,6 +241,10 @@ def clean_prediction_tracks(
             idx for idx in component_ids
             if int(stats[idx, cv2.CC_STAT_AREA]) >= max(4, int(largest_area * 0.002))
         ]
+        # A prediction containing only 1--3 pixels has components, but all of
+        # them are intentionally removed by the minimum-area filter.
+        if not component_ids:
+            continue
         primary = labels == component_ids[0]
         for component_id in component_ids[1:]:
             component = labels == component_id
