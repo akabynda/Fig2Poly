@@ -19,9 +19,7 @@ OUTPUT="$RUNS_ROOT/curve_model_benchmark_v1"
   --output "$OUTPUT/csv" \
   --threshold 0.30 \
   --rescue-threshold 0.15 \
-  --dataset "lineex=manifest=$DATA_ROOT/public_lineex_100k_v5/val.jsonl" \
   --dataset "ub_pmc22=manifest=$DATA_ROOT/lineformer_benchmarks/ub_pmc22_line_only/test.jsonl" \
-  --dataset "adobe_synth19=manifest=$DATA_ROOT/lineformer_benchmarks/adobe_synth19/test.jsonl" \
   --dataset "balanced_v5_test=manifest=$DATA_ROOT/combined_lineex_balanced_v5/test.jsonl"
 
 ls -lh "$OUTPUT/csv/per_image_metrics.csv" \
