@@ -45,6 +45,7 @@ STOP_PIPELINE
 
 # Local editor/agent and OS state
 .agents/
+SERVER_AGENT_NOTES.md
 .vscode/
 .idea/
 .DS_Store

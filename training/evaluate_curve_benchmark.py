@@ -58,11 +58,20 @@ def mask_to_official_points(mask: np.ndarray, interval: int = 10) -> np.ndarray:
     return np.column_stack((xs, ys)).astype(np.float32)
 
 
-def target_points(sample: dict) -> list[np.ndarray]:
-    return [
-        np.asarray([[float(point["x"]), float(point["y"])] for point in curve["source_points"]], dtype=np.float32)
-        for curve in sample.get("curves", [])
-    ]
+def target_points(sample: dict, masks: list[np.ndarray]) -> list[np.ndarray]:
+    result: list[np.ndarray] = []
+    for index, curve in enumerate(sample.get("curves", [])):
+        source_points = curve.get("source_points")
+        if source_points:
+            result.append(np.asarray(
+                [[float(point["x"]), float(point["y"])] for point in source_points],
+                dtype=np.float32,
+            ))
+        else:
+            # Merged synthetic records always have an exact instance mask, but
+            # older records do not necessarily retain the generator's points.
+            result.append(mask_to_official_points(masks[index]))
+    return result
 
 
 def target_masks(sample: dict, shape: tuple[int, int]) -> list[np.ndarray]:
@@ -80,7 +89,8 @@ def target_masks(sample: dict, shape: tuple[int, int]) -> list[np.ndarray]:
 
 def matched_metrics(predictions: list[dict], sample: dict, height: int, width: int) -> dict[str, float | int | None]:
     predicted_points = [mask_to_official_points(item["mask"]) for item in predictions]
-    gt_points = target_points(sample)
+    gt_masks = target_masks(sample, (height, width))
+    gt_points = target_points(sample, gt_masks)
     scores = np.zeros((len(gt_points), len(predicted_points)), dtype=np.float64)
     for gt_index, gt in enumerate(gt_points):
         for pred_index, pred in enumerate(predicted_points):
@@ -109,7 +119,6 @@ def matched_metrics(predictions: list[dict], sample: dict, height: int, width: i
         "matched_similarity_min": float(matched_scores.min()) if len(matched_scores) else 0.0,
     }
 
-    gt_masks = target_masks(sample, (height, width))
     ious, dices, chamfers, hausdorff95 = [], [], [], []
     tolerance_counts = {2: [0, 0, 0, 0], 5: [0, 0, 0, 0], 10: [0, 0, 0, 0]}
     for gt_index, pred_index in zip(rows, columns):

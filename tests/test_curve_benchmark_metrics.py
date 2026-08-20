@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from training.evaluate_curve_benchmark import mask_to_official_points, matched_metrics
+from training.evaluate_curve_benchmark import mask_to_official_points, matched_metrics, target_points
 
 
 def test_official_point_extraction_tracks_line_center():
@@ -36,3 +36,14 @@ def test_perfect_prediction_has_perfect_metrics(tmp_path):
     # interpolates, so even a perfect raster mask is a slightly lossy proxy.
     assert metrics["score_6a"] > 0.95
     assert metrics["mask_iou_penalized"] == 1.0
+
+
+def test_target_points_falls_back_to_instance_mask():
+    mask = np.zeros((30, 50), dtype=bool)
+    mask[12:15, 4:46] = True
+    sample = {"curves": [{"mask": "curve.png"}]}
+
+    points = target_points(sample, [mask])
+
+    assert len(points) == 1
+    assert len(points[0]) > 30
