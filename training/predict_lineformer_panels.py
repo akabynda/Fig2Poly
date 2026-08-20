@@ -33,6 +33,29 @@ def overlap_over_smaller(a: tuple[int, int, int, int], b: tuple[int, int, int, i
     return intersection / max(1, min(area_a, area_b))
 
 
+def select_plot_boxes(
+    candidates: list[tuple[float, tuple[int, int, int, int]]],
+) -> list[tuple[int, int, int, int]]:
+    """Prefer the outer box when OpenCV produces nested plot candidates."""
+    def area(box: tuple[int, int, int, int]) -> int:
+        return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+    selected: list[tuple[int, int, int, int]] = []
+    # Area is primary: a smaller nested frame (ticks, inner spines, legend) must
+    # never win merely because Hough assigned more line support to it.
+    for _, box in sorted(
+        candidates, key=lambda item: (area(item[1]), item[0]), reverse=True
+    ):
+        if all(
+            intersection_over_union(box, old) < 0.58
+            and overlap_over_smaller(box, old) < 0.70
+            for old in selected
+        ):
+            selected.append(box)
+    selected.sort(key=lambda box: (box[1], box[0]))
+    return selected
+
+
 def detect_plot_boxes(image: np.ndarray) -> list[tuple[int, int, int, int]]:
     """Detect open or closed plot areas from intersecting long horizontal/vertical axes."""
     height, width = image.shape[:2]
@@ -139,15 +162,7 @@ def detect_plot_boxes(image: np.ndarray) -> list[tuple[int, int, int, int]]:
                    min(width, int(px2 + pad_x * 0.45)), min(height, int(py2 + pad_y)))
             candidates.append((vlen1 + vlen2, box))
 
-    selected: list[tuple[int, int, int, int]] = []
-    for _, box in sorted(candidates, key=lambda item: item[0], reverse=True):
-        if all(
-            intersection_over_union(box, old) < 0.58
-            and overlap_over_smaller(box, old) < 0.70
-            for old in selected
-        ):
-            selected.append(box)
-    selected.sort(key=lambda box: (box[1], box[0]))
+    selected = select_plot_boxes(candidates)
     return selected if selected else [(0, 0, width, height)]
 
 

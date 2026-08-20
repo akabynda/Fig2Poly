@@ -7,6 +7,7 @@ from training.predict_lineformer_panels import (
     detect_plot_boxes,
     local_regression_error,
     mask_centerline,
+    select_plot_boxes,
     suppress_centerline_duplicates,
 )
 
@@ -45,6 +46,19 @@ def test_falls_back_to_full_image_without_plot_axes() -> None:
     image = np.full((300, 500, 3), 255, dtype=np.uint8)
 
     assert detect_plot_boxes(image) == [(0, 0, 500, 300)]
+
+
+def test_nested_plot_candidates_keep_largest_outer_box() -> None:
+    outer = (20, 20, 480, 280)
+    inner = (60, 50, 450, 250)
+    separate = (520, 20, 880, 280)
+    candidates = [
+        (900.0, inner),       # More Hough support must not make it win.
+        (500.0, outer),
+        (600.0, separate),
+    ]
+
+    assert select_plot_boxes(candidates) == [outer, separate]
 
 
 def prediction(y: int, score: float, panel: int = 1) -> dict:
