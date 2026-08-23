@@ -299,6 +299,53 @@ def test_dsc_config_profile_is_valid():
     assert profile.dsc_max_events>=12
     assert profile.dsc_page_layout_probability>0
     assert profile.dsc_surrounding_text_probability>0
+    assert profile.dsc_axis_font_max>=24
+    assert profile.dsc_curve_label_font_max>=20
+    assert profile.hard_negatives_probability>0
+
+
+def test_dsc_direct_labels_cover_the_whole_curve_and_support_large_fonts():
+    cfg=GeneratorConfig(
+        plot_domain="dsc",width=640,height=480,supersample=1,
+        min_curves=3,max_curves=3,max_points=320,multi_panel_probability=0,
+        dsc_page_layout_probability=0,dsc_direct_labels_probability=1,
+        dsc_curve_label_font_min=20,dsc_curve_label_font_max=20,
+        dsc_annotation_font_min=20,dsc_annotation_font_max=20,
+        annotations_probability=1,legend_probability=0,
+        hard_negatives_probability=0,occlusion_probability=0,
+        dsc_watermark_probability=0,
+    )
+    regions=set(); annotation_sizes=[]
+    for seed in range(12):
+        _,_,metadata=DatasetGenerator(cfg)._render_base(
+            random.Random(seed),np.random.default_rng(seed)
+        )
+        for curve in metadata["curves"]:
+            position=curve.get("label_position")
+            assert position and position["font_size_px"]==20
+            regions.add(position["region"])
+        annotation_sizes.extend(item["font_size_px"] for item in metadata["annotations"])
+    assert {"left","middle","right"}<=regions
+    assert annotation_sizes and max(annotation_sizes)==20
+
+
+def test_dsc_classic_obfuscations_are_recorded_and_removed_from_masks():
+    cfg=GeneratorConfig(
+        plot_domain="dsc",width=480,height=360,supersample=1,
+        min_curves=2,max_curves=2,max_points=280,multi_panel_probability=0,
+        dsc_page_layout_probability=0,dsc_direct_labels_probability=1,
+        annotations_probability=0,legend_probability=0,
+        hard_negatives_probability=1,occlusion_probability=1,
+        dsc_watermark_probability=0,
+    )
+    _,masks,metadata=DatasetGenerator(cfg)._render_base(
+        random.Random(117),np.random.default_rng(117)
+    )
+    types={item["type"] for item in metadata["occluders"]}
+    assert "text_box_occlusion" in types
+    assert types & {"reference_line","integration_baseline","onset_tangent"}
+    assert metadata["hard_negative_count"]>=2
+    assert all(mask.getbbox() is not None for mask in masks)
 
 
 def test_dsc_page_layout_can_embed_a_small_plot_with_hard_negatives():

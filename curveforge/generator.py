@@ -417,6 +417,18 @@ class DatasetGenerator:
             left=left_margin; right=w-right_margin
             top=top_margin; bottom=h-bottom_margin
         plot=(left,top,right,bottom)
+        plot_height_px=max(1,(bottom-top)//s)
+        def plot_font_size(minimum: int,maximum: int,height_fraction: float)->int:
+            capped=max(minimum,min(maximum,int(plot_height_px*height_fraction)))
+            return rng.randint(minimum,capped)
+
+        def clamp_text_xy(text_value: str,text_font,x_value: float,y_value: float,
+                          bounds: tuple[float,float,float,float]=plot)->tuple[int,int]:
+            box=draw.textbbox((0,0),text_value,font=text_font)
+            text_w=box[2]-box[0]; text_h=box[3]-box[1]
+            x0,y0,x1,y1=bounds
+            return (int(min(max(x0,x_value),max(x0,x1-text_w))),
+                    int(min(max(y0,y_value),max(y0,y1-text_h))))
         layout=rng.choices(["stacked","overlay"],[58,42])[0]
         upper=min(self.cfg.max_curves,forced_curve_max or self.cfg.max_curves,10)
         count=rng.choices(list(range(self.cfg.min_curves,upper+1)),
@@ -469,7 +481,8 @@ class DatasetGenerator:
         else: draw.line((left,top,left,bottom,right,bottom),fill=fg,width=aw)
         temp_lo=rng.choice([20,25,30,40,50,60,80]); temp_hi=rng.choice([150,180,200,250,300,350,450])
         if temp_hi<=temp_lo+80: temp_hi=temp_lo+100
-        tick_font=font(rng.randint(8,12)*s)
+        tick_font_size=plot_font_size(self.cfg.dsc_tick_font_min,self.cfg.dsc_tick_font_max,.10)
+        tick_font=font(tick_font_size*s)
         for j in range(6):
             xx=left+(right-left)*j/5
             draw.line((xx,bottom,xx,bottom+5*s),fill=fg,width=max(1,s))
@@ -480,7 +493,8 @@ class DatasetGenerator:
                 yy=top+(bottom-top)*j/4; draw.line((left-5*s,yy,left,yy),fill=fg,width=max(1,s))
         xlabel="Temperature (°C)"
         ylabel=rng.choice(["Heat Flow (mW)","Heat flow (W/g)","DSC (mW/mg)","Normalized Heat Flow"])
-        label_font=font(rng.randint(11,16)*s)
+        axis_font_size=plot_font_size(self.cfg.dsc_axis_font_min,self.cfg.dsc_axis_font_max,.14)
+        label_font=font(axis_font_size*s)
         xlabel_width=label_font.getlength(xlabel)
         draw.text(((left+right-xlabel_width)/2,min(h-18*s,bottom+33*s)),xlabel,fill=fg,font=label_font)
         text_box=label_font.getbbox(ylabel)
@@ -493,7 +507,7 @@ class DatasetGenerator:
         occluder.paste(255,label_xy,label_alpha)
         palette=list(rng.choice(PALETTES if rng.random()<.62 else [PALETTES[-1]])); rng.shuffle(palette)
         if rng.random()<.28: palette=["#222222"]*count
-        masks=[]; curve_meta=[]
+        masks=[]; curve_meta=[]; display_tracks=[]
         for i,(trace,y,baseline_y) in enumerate(zip(traces,values,baselines),1):
             color=palette[(i-1)%len(palette)]
             width_px=rng.choices([1,2,3],[58,34,8])[0]
@@ -502,6 +516,7 @@ class DatasetGenerator:
             centered=y-trace["baseline"][0]
             yp=baseline_y-scale*centered
             points=self._segments(xp,yp,plot)
+            display_tracks.append((xp,yp))
             mask=Image.new("L",(w,h),0); md=ImageDraw.Draw(mask)
             draw_polyline(draw,points,color,width,"solid")
             draw_polyline(md,points,255,max(width,s),"solid")
@@ -527,11 +542,26 @@ class DatasetGenerator:
                 odraw.line((lx+7*s,yy,lx+31*s,yy),fill=255,width=max(s,curve["line_width_px"]*s))
                 odraw.text((lx+36*s,yy-6*s),curve["label"],fill=255,font=tick_font)
             occluders.append({"type":"legend","bbox":list(box),"opaque_background":True})
-        elif layout=="stacked":
-            for i,(curve,yy) in enumerate(zip(curve_meta,baselines)):
-                xy=(right-75*s,int(yy-13*s)); draw.text(xy,curve["label"],fill=curve["color"],font=tick_font)
-                odraw.text(xy,curve["label"],fill=255,font=tick_font)
-            occluders.append({"type":"direct_labels"})
+        elif rng.random()<self.cfg.dsc_direct_labels_probability:
+            regions={"left":(.04,.22),"middle":(.28,.72),"right":(.78,.96)}
+            for curve,(xp,yp) in zip(curve_meta,display_tracks):
+                region=rng.choices(list(regions),[30,42,28])[0]
+                fraction=rng.uniform(*regions[region])
+                index=min(len(xp)-1,max(0,int(fraction*(len(xp)-1))))
+                label_size=plot_font_size(self.cfg.dsc_curve_label_font_min,
+                                          self.cfg.dsc_curve_label_font_max,.11)
+                curve_font=font(label_size*s)
+                x_anchor=float(xp[index]); y_anchor=float(yp[index])
+                x_offset=rng.uniform(-.45,.08)*curve_font.getlength(curve["label"])
+                y_offset=rng.choice([-1,1])*rng.uniform(5,14)*s
+                xy=clamp_text_xy(curve["label"],curve_font,x_anchor+x_offset,y_anchor+y_offset)
+                draw.text(xy,curve["label"],fill=curve["color"],font=curve_font)
+                odraw.text(xy,curve["label"],fill=255,font=curve_font)
+                curve["label_position"]={
+                    "region":region,"anchor":[round(x_anchor/s,2),round(y_anchor/s,2)],
+                    "font_size_px":label_size,
+                }
+            occluders.append({"type":"direct_labels","placement":"along_curve"})
         annotations=[]
         if rng.random()<self.cfg.annotations_probability:
             candidates=[(i,e) for i,t in enumerate(traces) for e in t["events"]]
@@ -539,9 +569,57 @@ class DatasetGenerator:
             for trace_index,event in candidates[:rng.randint(1,min(4,len(candidates)))]:
                 xx=left+event["center"]*(right-left); yy=baselines[trace_index]-scale*event["amplitude"]
                 temperature=temp_lo+event["center"]*(temp_hi-temp_lo)
-                text_value=f"{temperature:.1f} °C"; xy=(int(xx-25*s),int(max(top,yy-24*s)))
-                draw.text(xy,text_value,fill=fg,font=tick_font); odraw.text(xy,text_value,fill=255,font=tick_font)
-                annotations.append({"type":"peak_temperature","temperature":round(temperature,2)})
+                text_value=f"{temperature:.1f} °C"
+                annotation_size=plot_font_size(self.cfg.dsc_annotation_font_min,
+                                               self.cfg.dsc_annotation_font_max,.11)
+                annotation_font=font(annotation_size*s)
+                xy=clamp_text_xy(text_value,annotation_font,xx-25*s,yy-rng.uniform(18,32)*s)
+                draw.text(xy,text_value,fill=fg,font=annotation_font)
+                odraw.text(xy,text_value,fill=255,font=annotation_font)
+                annotations.append({
+                    "type":"peak_temperature","temperature":round(temperature,2),
+                    "font_size_px":annotation_size,"position_px":[xy[0]//s,xy[1]//s],
+                })
+        if rng.random()<self.cfg.hard_negatives_probability:
+            for _ in range(rng.randint(1,3)):
+                kind=rng.choice(["reference_line","integration_baseline","onset_tangent"])
+                shade=rng.choice([(65,65,65),(105,105,105),(145,145,145)])
+                line_width=max(1,rng.choice([1,1,2])*s)
+                if kind=="reference_line" and rng.random()<.5:
+                    xx=rng.randint(int(left),int(right)); coords=(xx,top,xx,bottom)
+                elif kind=="reference_line":
+                    yy=rng.randint(int(top),int(bottom)); coords=(left,yy,right,yy)
+                else:
+                    trace_index=rng.randrange(count)
+                    event=rng.choice(traces[trace_index]["events"]) if traces[trace_index]["events"] else None
+                    center=event["center"] if event else rng.uniform(.2,.8)
+                    xx=left+center*(right-left); yy=float(baselines[trace_index])
+                    half=rng.uniform(.07,.18)*(right-left)
+                    slope=rng.uniform(-.15,.15)*(bottom-top)
+                    coords=(max(left,xx-half),yy-slope,min(right,xx+half),yy+slope)
+                draw.line(coords,fill=shade,width=line_width)
+                odraw.line(coords,fill=255,width=line_width)
+                occluders.append({"type":kind,"bbox":[round(float(v)/s,2) for v in coords]})
+                hard_negative_count+=1
+        if rng.random()<self.cfg.occlusion_probability:
+            for _ in range(rng.randint(1,2)):
+                min_box_w=max(18*s,int((right-left)*.05)); max_box_w=max(min_box_w,int((right-left)*.18))
+                min_box_h=max(10*s,int((bottom-top)*.04)); max_box_h=max(min_box_h,int((bottom-top)*.12))
+                box_w=rng.randint(min_box_w,max_box_w); box_h=rng.randint(min_box_h,max_box_h)
+                x0=rng.randint(int(left),max(int(left),int(right-box_w)))
+                y0=rng.randint(int(top),max(int(top),int(bottom-box_h)))
+                box=(x0,y0,min(right,x0+box_w),min(bottom,y0+box_h))
+                fill=rng.choice([bg,(245,245,245),(225,225,225)])
+                draw.rectangle(box,fill=fill,outline=rng.choice([None,(130,130,130)]),width=max(1,s))
+                odraw.rectangle(box,fill=255)
+                text_value=random_text(rng,1,3)
+                obsc_max=max(7,min(16,self.cfg.dsc_annotation_font_max))
+                obsc_font=font(plot_font_size(7,obsc_max,.08)*s)
+                text_xy=clamp_text_xy(text_value,obsc_font,x0+2*s,y0+1*s,box)
+                draw.text(text_xy,text_value,fill=fg,font=obsc_font)
+                odraw.text(text_xy,text_value,fill=255,font=obsc_font)
+                occluders.append({"type":"text_box_occlusion","bbox":[int(v)//s for v in box]})
+                hard_negative_count+=1
         title=rng.choice(["DSC thermograms","Differential scanning calorimetry"]) if rng.random()<self.cfg.title_probability else None
         if canvas_size is not None and w<300*s:
             title=None
@@ -553,7 +631,7 @@ class DatasetGenerator:
             else:
                 title=None
         watermark=None
-        if page_layout and rng.random()<self.cfg.dsc_watermark_probability:
+        if (page_layout or canvas_size is None) and rng.random()<self.cfg.dsc_watermark_probability:
             watermark=rng.choice(["PREPRINT","ACCEPTED MANUSCRIPT","DRAFT","RESEARCH COPY"])
             wm=Image.new("L",(w,h),0); wm_draw=ImageDraw.Draw(wm)
             wm_draw.text((rng.randint(0,max(0,w//3)),rng.randint(0,max(0,h-70*s))),watermark,
@@ -572,6 +650,7 @@ class DatasetGenerator:
             "hard_negative_count":hard_negative_count,"mask_semantics":"visible curve pixels only","curves":curve_meta,
             "plot_domain":"dsc","dsc_layout":layout,"dsc_polarity":template["polarity"],
             "dsc_dense_events":dense,"dsc_related_series":related,"annotations":annotations,
+            "font_sizes_px":{"ticks":tick_font_size,"axes":axis_font_size},
             "plot_bbox":list(plot),"figure_bbox":list(outer),"page_elements":page_elements,
             "caption":caption,
         }

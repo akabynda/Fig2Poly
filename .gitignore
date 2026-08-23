@@ -29,6 +29,7 @@ dist/
 *.bin
 checkpoints/
 wandb/
+benchmark_results/
 
 # Downloaded archives and temporary files
 *.zip

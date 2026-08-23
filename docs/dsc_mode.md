@@ -41,6 +41,17 @@ Important profile controls:
 - `multi_panel_probability`: probability of a multi-panel DSC figure;
 - `min_curves` / `max_curves`: traces per single panel.
 
+Typography has independent output-pixel ranges:
+
+- `dsc_tick_font_min` / `dsc_tick_font_max`: temperature tick labels;
+- `dsc_axis_font_min` / `dsc_axis_font_max`: axis labels and titles;
+- `dsc_curve_label_font_min` / `dsc_curve_label_font_max`: labels attached directly to traces;
+- `dsc_annotation_font_min` / `dsc_annotation_font_max`: peak-temperature annotations;
+- `dsc_direct_labels_probability`: probability of labels placed at random left, middle, or right points along each curve when a legend is not used.
+
+The upper size is automatically capped for a physically small panel so a large
+configured font cannot consume the whole plot.
+
 Document-layout augmentation is controlled independently:
 
 - `dsc_page_layout_probability`: embed the DSC figure into a larger article page;
@@ -50,9 +61,12 @@ Document-layout augmentation is controlled independently:
 - `dsc_caption_probability`: add an article-style figure caption;
 - `dsc_foreign_graphics_probability`: add a non-target table or mini-plot;
 - `dsc_watermark_probability`: overlay a watermark and remove its pixels from target masks.
+- `hard_negatives_probability`: add reference lines, integration baselines, or onset tangents;
+- `occlusion_probability`: add small opaque text boxes over the plot.
 
 Surrounding text, tables, foreign plots, captions, and watermarks are hard
-negatives. Only DSC traces are written to `curve_masks`.
+negatives. Only DSC traces are written to `curve_masks`; every added line, label,
+and opaque text box is also removed from the visible-curve masks.
 
 Multipanel and document layout are sampled independently. Consequently the
 dataset can contain clean single figures, documented single figures, clean

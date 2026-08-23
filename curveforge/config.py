@@ -18,6 +18,15 @@ class GeneratorConfig:
     dsc_caption_probability: float = 0.55
     dsc_foreign_graphics_probability: float = 0.30
     dsc_watermark_probability: float = 0.12
+    dsc_tick_font_min: int = 8
+    dsc_tick_font_max: int = 18
+    dsc_axis_font_min: int = 11
+    dsc_axis_font_max: int = 24
+    dsc_curve_label_font_min: int = 8
+    dsc_curve_label_font_max: int = 20
+    dsc_annotation_font_min: int = 8
+    dsc_annotation_font_max: int = 20
+    dsc_direct_labels_probability: float = 0.90
     width: int = 768
     height: int = 576
     supersample: int = 2
@@ -65,6 +74,12 @@ class GeneratorConfig:
             raise ValueError("dsc_max_events must be in [7, 64]")
         if not 0.15 <= self.dsc_plot_min_fraction <= 0.75:
             raise ValueError("dsc_plot_min_fraction must be in [0.15, 0.75]")
+        for prefix in ("dsc_tick_font", "dsc_axis_font", "dsc_curve_label_font",
+                       "dsc_annotation_font"):
+            minimum=getattr(self,f"{prefix}_min")
+            maximum=getattr(self,f"{prefix}_max")
+            if not 6 <= minimum <= maximum <= 48:
+                raise ValueError(f"{prefix} must satisfy 6 <= min <= max <= 48")
         if self.width < 128 or self.height < 128:
             raise ValueError("width and height must be at least 128")
         if not 1 <= self.supersample <= 4:
@@ -97,7 +112,7 @@ class GeneratorConfig:
             "dsc_page_layout_probability", "dsc_surrounding_text_probability",
             "dsc_multipanel_page_probability",
             "dsc_caption_probability", "dsc_foreign_graphics_probability",
-            "dsc_watermark_probability",
+            "dsc_watermark_probability", "dsc_direct_labels_probability",
             "crop_probability", "rotation_probability", "perspective_probability",
             "degradation_probability", "occlusion_probability", "same_color_probability",
             "grouped_color_probability", "related_curves_probability",
