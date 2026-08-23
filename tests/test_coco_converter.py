@@ -70,3 +70,30 @@ def test_convert_tiny_dataset_to_coco(tmp_path: Path) -> None:
                 tuple(annotation["segmentation"]["size"]),
             )
             assert int(decoded.sum()) == annotation["area"]
+
+
+def test_lineformer_conversion_dilates_only_training_masks(tmp_path: Path) -> None:
+    source=tmp_path/"source"
+    cfg=GeneratorConfig(
+        width=128,height=128,supersample=1,min_curves=1,max_curves=1,
+        empty_plot_probability=0,multi_panel_probability=0,seed=97,
+    )
+    DatasetGenerator(cfg).generate(source,3,val_fraction=1/3,test_fraction=1/3)
+    exact=tmp_path/"exact"; lineformer=tmp_path/"lineformer"
+    for split in ("train","val","test"):
+        convert_split(source,exact,split)
+        result=convert_split(
+            source,lineformer,split,category_name="line",
+            mask_dilation=3 if split=="train" else 1,
+        )
+        payload=json.loads((lineformer/"annotations"/f"instances_{split}.json").read_text())
+        assert payload["categories"]==[{"id":1,"name":"line","supercategory":"plot"}]
+        assert result["mask_dilation"]==(3 if split=="train" else 1)
+        exact_payload=json.loads((exact/"annotations"/f"instances_{split}.json").read_text())
+        exact_areas=[item["area"] for item in exact_payload["annotations"]]
+        converted_areas=[item["area"] for item in payload["annotations"]]
+        if split=="train":
+            assert all(converted>=original for converted,original in zip(converted_areas,exact_areas))
+            assert any(converted>original for converted,original in zip(converted_areas,exact_areas))
+        else:
+            assert converted_areas==exact_areas

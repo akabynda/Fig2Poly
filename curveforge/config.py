@@ -7,6 +7,17 @@ import json
 
 @dataclass(slots=True)
 class GeneratorConfig:
+    plot_domain: str = "general"
+    dsc_probability: float = 0.50
+    dsc_dense_probability: float = 0.18
+    dsc_max_events: int = 18
+    dsc_page_layout_probability: float = 0.35
+    dsc_multipanel_page_probability: float = 0.55
+    dsc_plot_min_fraction: float = 0.25
+    dsc_surrounding_text_probability: float = 0.75
+    dsc_caption_probability: float = 0.55
+    dsc_foreign_graphics_probability: float = 0.30
+    dsc_watermark_probability: float = 0.12
     width: int = 768
     height: int = 576
     supersample: int = 2
@@ -48,6 +59,12 @@ class GeneratorConfig:
     seed: int = 20260722
 
     def validate(self) -> None:
+        if self.plot_domain not in {"general", "dsc", "mixed"}:
+            raise ValueError("plot_domain must be one of: general, dsc, mixed")
+        if not 7 <= self.dsc_max_events <= 64:
+            raise ValueError("dsc_max_events must be in [7, 64]")
+        if not 0.15 <= self.dsc_plot_min_fraction <= 0.75:
+            raise ValueError("dsc_plot_min_fraction must be in [0.15, 0.75]")
         if self.width < 128 or self.height < 128:
             raise ValueError("width and height must be at least 128")
         if not 1 <= self.supersample <= 4:
@@ -75,6 +92,12 @@ class GeneratorConfig:
         if not 20 <= self.min_jpeg_quality <= self.max_jpeg_quality <= 100:
             raise ValueError("JPEG quality must satisfy 20 <= min <= max <= 100")
         probability_fields = (
+            "dsc_probability",
+            "dsc_dense_probability",
+            "dsc_page_layout_probability", "dsc_surrounding_text_probability",
+            "dsc_multipanel_page_probability",
+            "dsc_caption_probability", "dsc_foreign_graphics_probability",
+            "dsc_watermark_probability",
             "crop_probability", "rotation_probability", "perspective_probability",
             "degradation_probability", "occlusion_probability", "same_color_probability",
             "grouped_color_probability", "related_curves_probability",

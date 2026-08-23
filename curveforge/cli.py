@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed",type=int,help="Override random seed")
     p.add_argument("--width",type=int,help="Override image width")
     p.add_argument("--height",type=int,help="Override image height")
+    p.add_argument("--plot-domain",choices=("general","dsc","mixed"),help="Override plot domain")
     p.add_argument("--val-fraction",type=float,default=.1)
     p.add_argument("--test-fraction",type=float,default=.1)
     p.add_argument("--workers","-j",type=int,default=1,help="Parallel worker processes")
@@ -35,7 +36,7 @@ def main(argv: list[str]|None=None) -> int:
         print(f"Wrote {args.write_default_config}")
         return 0
     cfg=GeneratorConfig.from_json(args.config) if args.config else GeneratorConfig()
-    for key in ("seed","width","height"):
+    for key in ("seed","width","height","plot_domain"):
         value=getattr(args,key)
         if value is not None: setattr(cfg,key,value)
     cfg.validate()

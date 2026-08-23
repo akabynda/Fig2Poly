@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 def coco_counts(mask: np.ndarray) -> str:
@@ -43,7 +43,12 @@ def link_or_copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def convert_split(source: Path, output: Path, split: str) -> dict:
+def convert_split(source: Path, output: Path, split: str,
+                  category_name: str="curve",mask_dilation: int=1) -> dict:
+    if not category_name.strip():
+        raise ValueError("category_name must not be empty")
+    if mask_dilation<1 or mask_dilation%2==0:
+        raise ValueError("mask_dilation must be a positive odd integer")
     manifest = source / f"{split}.jsonl"
     images: list[dict] = []
     annotations: list[dict] = []
@@ -68,7 +73,10 @@ def convert_split(source: Path, output: Path, split: str) -> dict:
             )
             for curve in record.get("curves", []):
                 mask_path = source / curve["mask"]
-                mask = np.asarray(Image.open(mask_path).convert("L")) > 0
+                mask_image=Image.open(mask_path).convert("L")
+                if mask_dilation>1:
+                    mask_image=mask_image.filter(ImageFilter.MaxFilter(mask_dilation))
+                mask = np.asarray(mask_image) > 0
                 ys, xs = np.nonzero(mask)
                 if not len(xs):
                     continue
@@ -92,7 +100,7 @@ def convert_split(source: Path, output: Path, split: str) -> dict:
     payload = {
         "info": {"description": "Fig2Poly visible curve instances"},
         "licenses": [],
-        "categories": [{"id": 1, "name": "curve", "supercategory": "plot"}],
+        "categories": [{"id": 1, "name": category_name, "supercategory": "plot"}],
         "images": images,
         "annotations": annotations,
     }
@@ -102,16 +110,28 @@ def convert_split(source: Path, output: Path, split: str) -> dict:
     temporary = target.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(temporary, target)
-    return {"split": split, "images": len(images), "instances": len(annotations)}
+    return {"split": split, "images": len(images), "instances": len(annotations),
+            "category_name":category_name,"mask_dilation":mask_dilation}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Convert Fig2Poly JSONL masks to COCO RLE")
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--category-name", default="curve")
+    parser.add_argument(
+        "--train-mask-dilation",type=int,default=1,
+        help="Odd dilation kernel used only for train masks; val/test stay exact",
+    )
     args = parser.parse_args(argv)
+    if args.train_mask_dilation<1 or args.train_mask_dilation%2==0:
+        parser.error("--train-mask-dilation must be a positive odd integer")
     results = [
-        convert_split(args.source.resolve(), args.output.resolve(), split)
+        convert_split(
+            args.source.resolve(),args.output.resolve(),split,
+            category_name=args.category_name,
+            mask_dilation=args.train_mask_dilation if split=="train" else 1,
+        )
         for split in ("train", "val", "test")
     ]
     print(json.dumps(results, indent=2))

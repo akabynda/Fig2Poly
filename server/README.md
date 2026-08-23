@@ -25,6 +25,7 @@ PyTorch build.
 ```bash
 bash server/setup_yolo.sh
 bash server/setup_maskdino.sh
+bash server/setup_lineformer.sh
 ```
 
 MaskDINO contains compiled CUDA deformable-attention operators. The setup must
@@ -63,6 +64,34 @@ The v5 MaskDINO job keeps BCE + Dice instance supervision and adds a
 thickness-invariant centreline/tangent auxiliary loss. Validation reports the
 LineFormer/ChartInfo 6a and 6b continuous-line scores; early stopping follows
 the count-penalized 6b score instead of COCO AP alone.
+
+### DSC fine-tuning for LineFormer
+
+Point `DSC_DATASET` in `server/.env` at a completed CurveForge dataset, then
+prepare LineFormer's COCO input and start fine-tuning:
+
+```bash
+bash server/prepare_lineformer_dsc.sh
+bash server/train_lineformer_dsc.sh
+```
+
+On Slurm:
+
+```bash
+prep_job=$(sbatch --parsable server/slurm/prepare_lineformer_dsc.sbatch)
+sbatch --dependency="afterok:$prep_job" server/slurm/train_lineformer_dsc.sbatch
+```
+
+The converter names the single category `line`, dilates train targets to 3 px,
+and leaves validation/test masks exact. This makes one-pixel DSC traces stable
+after LineFormer's 512 px resize without inflating evaluation scores. Empty
+CurveForge plots remain in the training set as hard negatives. Training starts
+from `LINEFORMER_WEIGHTS` and automatically resumes from `latest.pth`.
+
+Defaults are conservative for fine-tuning: 10,000 iterations, learning rate
+`2e-5`, two samples per GPU, validation/checkpointing every 500 iterations.
+Use the untouched test split only after selecting the checkpoint and confidence
+threshold on validation.
 
 ## 4. Smoke test before full training
 
