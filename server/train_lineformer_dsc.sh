@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
+# Preserve resources selected by Slurm before common.sh loads server/.env.
+requested_num_gpus="${NUM_GPUS:-}"
+allocated_cuda_devices="${CUDA_VISIBLE_DEVICES:-}"
 source "$(dirname "$0")/lib/common.sh"
+[[ -n "$requested_num_gpus" ]] && NUM_GPUS="$requested_num_gpus"
+[[ -n "$allocated_cuda_devices" ]] && export CUDA_VISIBLE_DEVICES="$allocated_cuda_devices"
 
 PY="$FIG2POLY_STORAGE/.venvs/lineformer/bin/python"
 LINEFORMER_ROOT="${LINEFORMER_ROOT:-$FIG2POLY_ROOT/third_party/LineFormer}"

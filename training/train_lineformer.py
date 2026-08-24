@@ -37,6 +37,12 @@ def validate_dataset(dataset: Path) -> None:
             raise ValueError(f"{split} categories must be {{'line'}}, got {categories}")
 
 
+def configure_logging(cfg,interval: int) -> None:
+    # Keep training independent of the optional tensorboard package installed
+    # by some, but not all, LineFormer environments.
+    cfg.log_config={"interval":interval,"hooks":[{"type":"TextLoggerHook"}]}
+
+
 def build_config(args: argparse.Namespace) -> Path:
     root=args.lineformer_root.resolve(); dataset=args.dataset.resolve(); output=args.output.resolve()
     config_path=root/"lineformer_swin_t_config.py"
@@ -76,7 +82,7 @@ def build_config(args: argparse.Namespace) -> Path:
     cfg.checkpoint_config={
         "interval":args.checkpoint_interval,"by_epoch":False,"save_last":True,"max_keep_ckpts":3,
     }
-    cfg.log_config.interval=args.log_interval
+    configure_logging(cfg,args.log_interval)
     cfg.seed=args.seed
     cfg.gpu_ids=list(range(args.num_gpus))
     cfg.auto_scale_lr={"enable":False,"base_batch_size":16}
