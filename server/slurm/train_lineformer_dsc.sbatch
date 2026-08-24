@@ -13,7 +13,9 @@
 
 set -Eeuo pipefail
 PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
-source "$PROJECT_ROOT/server/lib/common.sh"
+# The inner launcher loads common.sh after preserving Slurm's NUM_GPUS and
+# CUDA_VISIBLE_DEVICES. Loading it here would overwrite the allocation with
+# the single-GPU defaults from server/.env.
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 trainer_pid=""
