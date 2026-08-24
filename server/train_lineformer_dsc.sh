@@ -4,9 +4,15 @@ set -Eeuo pipefail
 # Preserve resources selected by Slurm before common.sh loads server/.env.
 requested_num_gpus="${NUM_GPUS:-}"
 allocated_cuda_devices="${CUDA_VISIBLE_DEVICES:-}"
+requested_max_iters="${LINEFORMER_MAX_ITERS:-}"
+requested_dsc_coco="${LINEFORMER_DSC_COCO:-}"
+requested_dsc_run="${LINEFORMER_DSC_RUN:-}"
 source "$(dirname "$0")/lib/common.sh"
 [[ -n "$requested_num_gpus" ]] && NUM_GPUS="$requested_num_gpus"
 [[ -n "$allocated_cuda_devices" ]] && export CUDA_VISIBLE_DEVICES="$allocated_cuda_devices"
+[[ -n "$requested_max_iters" ]] && LINEFORMER_MAX_ITERS="$requested_max_iters"
+[[ -n "$requested_dsc_coco" ]] && LINEFORMER_DSC_COCO="$requested_dsc_coco"
+[[ -n "$requested_dsc_run" ]] && LINEFORMER_DSC_RUN="$requested_dsc_run"
 
 PY="$FIG2POLY_STORAGE/.venvs/lineformer/bin/python"
 LINEFORMER_ROOT="${LINEFORMER_ROOT:-$FIG2POLY_ROOT/third_party/LineFormer}"
