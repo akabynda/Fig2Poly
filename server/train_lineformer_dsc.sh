@@ -7,12 +7,18 @@ allocated_cuda_devices="${CUDA_VISIBLE_DEVICES:-}"
 requested_max_iters="${LINEFORMER_MAX_ITERS:-}"
 requested_dsc_coco="${LINEFORMER_DSC_COCO:-}"
 requested_dsc_run="${LINEFORMER_DSC_RUN:-}"
+requested_eval_interval="${LINEFORMER_EVAL_INTERVAL:-}"
+requested_early_stopping_patience="${LINEFORMER_EARLY_STOPPING_PATIENCE:-}"
+requested_early_stopping_min_delta="${LINEFORMER_EARLY_STOPPING_MIN_DELTA:-}"
 source "$(dirname "$0")/lib/common.sh"
 [[ -n "$requested_num_gpus" ]] && NUM_GPUS="$requested_num_gpus"
 [[ -n "$allocated_cuda_devices" ]] && export CUDA_VISIBLE_DEVICES="$allocated_cuda_devices"
 [[ -n "$requested_max_iters" ]] && LINEFORMER_MAX_ITERS="$requested_max_iters"
 [[ -n "$requested_dsc_coco" ]] && LINEFORMER_DSC_COCO="$requested_dsc_coco"
 [[ -n "$requested_dsc_run" ]] && LINEFORMER_DSC_RUN="$requested_dsc_run"
+[[ -n "$requested_eval_interval" ]] && LINEFORMER_EVAL_INTERVAL="$requested_eval_interval"
+[[ -n "$requested_early_stopping_patience" ]] && LINEFORMER_EARLY_STOPPING_PATIENCE="$requested_early_stopping_patience"
+[[ -n "$requested_early_stopping_min_delta" ]] && LINEFORMER_EARLY_STOPPING_MIN_DELTA="$requested_early_stopping_min_delta"
 
 PY="$FIG2POLY_STORAGE/.venvs/lineformer/bin/python"
 LINEFORMER_ROOT="${LINEFORMER_ROOT:-$FIG2POLY_ROOT/third_party/LineFormer}"
@@ -36,4 +42,6 @@ resume=()
   --num-gpus "${NUM_GPUS:-1}" \
   --eval-interval "${LINEFORMER_EVAL_INTERVAL:-500}" \
   --checkpoint-interval "${LINEFORMER_CHECKPOINT_INTERVAL:-500}" \
+  --early-stopping-patience "${LINEFORMER_EARLY_STOPPING_PATIENCE:-0}" \
+  --early-stopping-min-delta "${LINEFORMER_EARLY_STOPPING_MIN_DELTA:-0.0}" \
   "${resume[@]}"

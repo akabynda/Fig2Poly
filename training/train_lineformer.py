@@ -43,6 +43,26 @@ def configure_logging(cfg,interval: int) -> None:
     cfg.log_config={"interval":interval,"hooks":[{"type":"TextLoggerHook"}]}
 
 
+def configure_early_stopping(cfg,args: argparse.Namespace) -> None:
+    if args.early_stopping_patience == 0:
+        return
+    cfg.custom_imports={
+        "imports":["training.lineformer_hooks"],"allow_failed_imports":False,
+    }
+    hooks=list(cfg.get("custom_hooks",[]))
+    hooks.append({
+        "type":"ValidationEarlyStoppingHook",
+        "metric":"segm_mAP",
+        "interval":args.eval_interval,
+        "patience":args.early_stopping_patience,
+        "min_delta":args.early_stopping_min_delta,
+        # Evaluation runs at LOW (70), loggers at VERY_LOW (90). Read the
+        # metric after evaluation but before the logger clears its buffer.
+        "priority":80,
+    })
+    cfg.custom_hooks=hooks
+
+
 def build_config(args: argparse.Namespace) -> Path:
     root=args.lineformer_root.resolve(); dataset=args.dataset.resolve(); output=args.output.resolve()
     config_path=root/"lineformer_swin_t_config.py"
@@ -78,11 +98,15 @@ def build_config(args: argparse.Namespace) -> Path:
     cfg.max_iters=args.max_iters
     cfg.workflow=[("train",1)]
     cfg.optimizer.lr=args.base_lr
-    cfg.evaluation={"interval":args.eval_interval,"metric":["segm"],"save_best":"segm_mAP"}
+    cfg.evaluation={
+        "interval":args.eval_interval,"metric":["segm"],
+        "save_best":"segm_mAP","rule":"greater",
+    }
     cfg.checkpoint_config={
         "interval":args.checkpoint_interval,"by_epoch":False,"save_last":True,"max_keep_ckpts":3,
     }
     configure_logging(cfg,args.log_interval)
+    configure_early_stopping(cfg,args)
     cfg.seed=args.seed
     cfg.gpu_ids=list(range(args.num_gpus))
     cfg.auto_scale_lr={"enable":False,"base_batch_size":16}
@@ -92,7 +116,11 @@ def build_config(args: argparse.Namespace) -> Path:
     summary={
         "lineformer_root":str(root),"dataset":str(dataset),"weights":str(args.weights.resolve()) if args.weights else None,
         "max_iters":args.max_iters,"base_lr":args.base_lr,"samples_per_gpu":args.samples_per_gpu,
-        "num_gpus":args.num_gpus,"train_mask_note":"COCO train masks may be dilated; val/test masks are exact",
+        "num_gpus":args.num_gpus,"eval_interval":args.eval_interval,
+        "early_stopping_patience":args.early_stopping_patience,
+        "early_stopping_min_delta":args.early_stopping_min_delta,
+        "best_metric":"segm_mAP",
+        "train_mask_note":"COCO train masks may be dilated; val/test masks are exact",
     }
     (output/"finetune_request.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return generated
@@ -111,6 +139,8 @@ def main(argv: list[str]|None=None) -> int:
     parser.add_argument("--num-gpus",type=int,default=1)
     parser.add_argument("--eval-interval",type=int,default=500)
     parser.add_argument("--checkpoint-interval",type=int,default=500)
+    parser.add_argument("--early-stopping-patience",type=int,default=0)
+    parser.add_argument("--early-stopping-min-delta",type=float,default=0.0)
     parser.add_argument("--log-interval",type=int,default=50)
     parser.add_argument("--seed",type=int,default=20260903)
     parser.add_argument("--resume",action="store_true",help="Auto-resume from output/latest.pth")
@@ -120,6 +150,8 @@ def main(argv: list[str]|None=None) -> int:
                  "eval_interval","checkpoint_interval","log_interval"):
         if getattr(args,name)<1: parser.error(f"--{name.replace('_','-')} must be positive")
     if args.base_lr<=0: parser.error("--base-lr must be positive")
+    if args.early_stopping_patience<0: parser.error("--early-stopping-patience must be non-negative")
+    if args.early_stopping_min_delta<0: parser.error("--early-stopping-min-delta must be non-negative")
     if args.weights and not args.weights.is_file(): parser.error(f"weights not found: {args.weights}")
     generated=build_config(args)
     if args.dry_run:

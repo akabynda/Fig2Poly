@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from training.train_lineformer import configure_logging, dataset_config, validate_dataset
+from training.train_lineformer import (
+    configure_early_stopping,
+    configure_logging,
+    dataset_config,
+    validate_dataset,
+)
 
 
 def make_dataset(root: Path,category: str="line") -> None:
@@ -34,3 +39,27 @@ def test_configure_logging_does_not_require_tensorboard() -> None:
     cfg=SimpleNamespace(log_config=SimpleNamespace(interval=50,hooks=[]))
     configure_logging(cfg,25)
     assert cfg.log_config=={"interval":25,"hooks":[{"type":"TextLoggerHook"}]}
+
+
+class FakeConfig(SimpleNamespace):
+    def get(self,name,default=None):
+        return getattr(self,name,default)
+
+
+def test_configure_lineformer_early_stopping_after_validation() -> None:
+    cfg=FakeConfig(custom_hooks=[{"type":"NumClassCheckHook"}])
+    args=SimpleNamespace(
+        early_stopping_patience=2,
+        early_stopping_min_delta=0.001,
+        eval_interval=20000,
+    )
+    configure_early_stopping(cfg,args)
+    assert cfg.custom_imports["imports"]==["training.lineformer_hooks"]
+    assert cfg.custom_hooks[-1]=={
+        "type":"ValidationEarlyStoppingHook",
+        "metric":"segm_mAP",
+        "interval":20000,
+        "patience":2,
+        "min_delta":0.001,
+        "priority":80,
+    }
