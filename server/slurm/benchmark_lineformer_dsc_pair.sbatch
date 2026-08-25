@@ -11,10 +11,8 @@
 
 set -Eeuo pipefail
 PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
+ALLOCATED_CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
 source "$PROJECT_ROOT/server/lib/common.sh"
-# Let Slurm assign a different device to each parallel step. common.sh may set
-# a workstation-style CUDA_VISIBLE_DEVICES default from server/.env.
-unset CUDA_VISIBLE_DEVICES
 PY="$FIG2POLY_STORAGE/.venvs/lineformer/bin/python"
 OUTPUT="$RUNS_ROOT/lineformer_dsc_test_comparison"
 DATASET="dsc_test=manifest=$DATA_ROOT/dataset_dsc/test.jsonl"
@@ -40,11 +38,18 @@ run_model() {
 export -f run_model
 export PY PROJECT_ROOT DATASET
 
-srun --exclusive --ntasks=1 --cpus-per-task=8 --mem=44G --gres=gpu:1 \
-  bash -c 'run_model "$1" "$2"' _ "$CLASSIC_WEIGHTS" "$OUTPUT/classic.sqlite" &
+IFS=',' read -r gpu_classic gpu_finetuned _ <<< "$ALLOCATED_CUDA_DEVICES"
+if [[ -z "$gpu_classic" || -z "$gpu_finetuned" ]]; then
+  echo "Expected two Slurm GPUs, got CUDA_VISIBLE_DEVICES=$ALLOCATED_CUDA_DEVICES" >&2
+  exit 2
+fi
+echo "Launching classic and fine-tuned models on two allocated GPUs"
+
+CUDA_VISIBLE_DEVICES="$gpu_classic" \
+  run_model "$CLASSIC_WEIGHTS" "$OUTPUT/classic.sqlite" &
 classic_pid=$!
-srun --exclusive --ntasks=1 --cpus-per-task=8 --mem=44G --gres=gpu:1 \
-  bash -c 'run_model "$1" "$2"' _ "$FINETUNED_WEIGHTS" "$OUTPUT/finetuned.sqlite" &
+CUDA_VISIBLE_DEVICES="$gpu_finetuned" \
+  run_model "$FINETUNED_WEIGHTS" "$OUTPUT/finetuned.sqlite" &
 finetuned_pid=$!
 
 set +e
