@@ -208,10 +208,10 @@ def fused_predictions(maskdino: list[dict], lineformer: list[dict], lineformer_l
     return fused
 
 
-def summarize(rows: list[dict]) -> list[dict]:
+def summarize(rows: list[dict], variants: tuple[str, ...] = VARIANTS) -> list[dict]:
     summaries = []
     for dataset in sorted({row["dataset"] for row in rows}):
-        for variant in VARIANTS:
+        for variant in variants:
             group = [row for row in rows if row["dataset"] == dataset and row["variant"] == variant]
             if not group:
                 continue
