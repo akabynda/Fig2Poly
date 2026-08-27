@@ -10,17 +10,23 @@ from training.evaluate_curve_benchmark import matched_metrics, summarize, write_
 
 
 MODELS = ("classic", "finetuned")
-VARIANTS = tuple(
-    variant
-    for model in MODELS
-    for variant in (f"{model}_paper", f"{model}_panel_post")
-)
 
 
-def article_summary(rows: list[dict]) -> list[dict]:
+def model_variants(models: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        variant
+        for model in models
+        for variant in (f"{model}_paper", f"{model}_panel_post")
+    )
+
+
+VARIANTS = model_variants(MODELS)
+
+
+def article_summary(rows: list[dict], variants: tuple[str, ...] = VARIANTS) -> list[dict]:
     """Keep the two metrics reported as the main LineFormer paper results."""
     result = []
-    for row in summarize(rows, variants=VARIANTS):
+    for row in summarize(rows, variants=variants):
         if not row["variant"].endswith("_paper"):
             continue
         result.append({
@@ -44,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", action="append", type=parse_dataset, required=True)
     parser.add_argument("--classic-db", type=Path, required=True)
     parser.add_argument("--finetuned-db", type=Path, required=True)
+    parser.add_argument("--classic-label", default="classic")
+    parser.add_argument("--finetuned-label", default="finetuned")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threshold", type=float, default=0.30)
     args = parser.parse_args(argv)
@@ -52,9 +60,14 @@ def main(argv: list[str] | None = None) -> int:
         if kind != "manifest":
             parser.error("Task 6a/6b evaluation requires manifests with ground-truth curves")
 
+    models = (args.classic_label.strip(), args.finetuned_label.strip())
+    if not all(models) or len(set(models)) != 2:
+        parser.error("model labels must be non-empty and distinct")
+    variants = model_variants(models)
+
     stores = {
-        "classic": PredictionStore(args.classic_db, writable=False),
-        "finetuned": PredictionStore(args.finetuned_db, writable=False),
+        models[0]: PredictionStore(args.classic_db, writable=False),
+        models[1]: PredictionStore(args.finetuned_db, writable=False),
     }
     rows: list[dict] = []
     dataset_counts: dict[str, int] = {}
@@ -110,15 +123,15 @@ def main(argv: list[str] | None = None) -> int:
 
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    summaries = summarize(rows, variants=VARIANTS)
-    write_csv(output / "lineformer_article_metrics.csv", article_summary(rows))
+    summaries = summarize(rows, variants=variants)
+    write_csv(output / "lineformer_article_metrics.csv", article_summary(rows, variants))
     write_csv(output / "summary_metrics.csv", summaries)
     write_csv(output / "per_image_metrics.csv", rows)
     (output / "protocol.json").write_text(json.dumps({
         "dataset_image_counts": dataset_counts,
         "score_threshold": args.threshold,
-        "primary_variants": ["classic_paper", "finetuned_paper"],
-        "supplemental_variants": ["classic_panel_post", "finetuned_panel_post"],
+        "primary_variants": [f"{model}_paper" for model in models],
+        "supplemental_variants": [f"{model}_panel_post" for model in models],
         "primary_metrics": {
             "task_6a": "LineFormer/ChartInfo continuous-line score normalized by ground-truth curve count",
             "task_6b": "The same continuous-line score with extra or missing curves penalized",

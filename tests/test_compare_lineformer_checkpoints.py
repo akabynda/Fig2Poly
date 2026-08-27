@@ -1,6 +1,6 @@
 import pytest
 
-from training.compare_lineformer_checkpoints import article_summary
+from training.compare_lineformer_checkpoints import article_summary, model_variants
 
 
 def test_article_summary_only_contains_paper_protocol_variants():
@@ -29,3 +29,19 @@ def test_article_summary_only_contains_paper_protocol_variants():
     assert summary[0]["task_6a_mean"] == 0.4
     assert summary[1]["task_6b_mean"] == pytest.approx(0.7)
     assert all(item["score_threshold"] == 0.3 for item in summary)
+
+
+def test_article_summary_accepts_experiment_labels():
+    variants = model_variants(("dilated_train", "exact_train"))
+    rows = [
+        {
+            "dataset": "dsc_test", "split": "test", "image_id": "1", "image": "1.png",
+            "variant": variant, "error": None, "score_6a": 0.9, "score_6b": 0.8,
+            "score_threshold": 0.3,
+        }
+        for variant in variants
+    ]
+
+    summary = article_summary(rows, variants)
+
+    assert [item["model"] for item in summary] == ["dilated_train", "exact_train"]
