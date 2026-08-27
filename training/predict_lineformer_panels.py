@@ -442,6 +442,7 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.resolve()
     sys.path.insert(0, str(root))
+    sys.path.insert(0, str(root / "mmdetection"))
     from mmdet.apis import inference_detector, init_detector
 
     model = init_detector(str(root / "lineformer_swin_t_config.py"), str(args.weights), device="cuda:0")
