@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                     processed, processed_meta = store.get(dataset, sample_id, "processed", model_name)
                     height = int(raw_meta["height"])
                     width = int(raw_meta["width"])
-                    variants = {
+                    prediction_variants = {
                         # This is the paper-compatible path: whole-image inference
                         # and the score threshold used by LineFormer's infer.py.
                         f"{model_name}_paper": (
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                             processed_meta["error"],
                         ),
                     }
-                    for variant, (predictions, inference_seconds, post_seconds, error) in variants.items():
+                    for variant, (predictions, inference_seconds, post_seconds, error) in prediction_variants.items():
                         predictions = threshold_predictions(predictions, args.threshold)
                         metrics = matched_metrics(predictions, sample, height, width)
                         rows.append({
