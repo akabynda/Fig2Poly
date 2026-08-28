@@ -63,6 +63,7 @@ def test_convert_tiny_dataset_to_coco(tmp_path: Path) -> None:
         assert payload["categories"] == [
             {"id": 1, "name": "curve", "supercategory": "plot"}
         ]
+        assert payload["info"]["mask_dilation"] == 1
         assert (output / "images" / split / payload["images"][0]["file_name"]).is_file()
         for annotation in payload["annotations"]:
             decoded = decode_mask(
@@ -97,3 +98,33 @@ def test_lineformer_conversion_dilates_only_training_masks(tmp_path: Path) -> No
             assert any(converted>original for converted,original in zip(converted_areas,exact_areas))
         else:
             assert converted_areas==exact_areas
+
+
+def test_lineformer_conversion_can_dilate_train_and_val_only(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    cfg = GeneratorConfig(
+        width=128, height=128, supersample=1, min_curves=1, max_curves=1,
+        empty_plot_probability=0, multi_panel_probability=0, seed=101,
+    )
+    DatasetGenerator(cfg).generate(source, 3, val_fraction=1 / 3, test_fraction=1 / 3)
+    exact = tmp_path / "exact"
+    dilated = tmp_path / "dilated"
+    for split in ("train", "val", "test"):
+        convert_split(source, exact, split)
+        dilation = 3 if split in {"train", "val"} else 1
+        result = convert_split(source, dilated, split, category_name="line", mask_dilation=dilation)
+        payload = json.loads(
+            (dilated / "annotations" / f"instances_{split}.json").read_text()
+        )
+        exact_payload = json.loads(
+            (exact / "annotations" / f"instances_{split}.json").read_text()
+        )
+        assert result["mask_dilation"] == dilation
+        assert payload["info"]["mask_dilation"] == dilation
+        areas = [item["area"] for item in payload["annotations"]]
+        exact_areas = [item["area"] for item in exact_payload["annotations"]]
+        if split in {"train", "val"}:
+            assert all(area >= exact_area for area, exact_area in zip(areas, exact_areas))
+            assert any(area > exact_area for area, exact_area in zip(areas, exact_areas))
+        else:
+            assert areas == exact_areas

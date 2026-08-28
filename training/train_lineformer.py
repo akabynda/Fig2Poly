@@ -120,7 +120,7 @@ def build_config(args: argparse.Namespace) -> Path:
         "early_stopping_patience":args.early_stopping_patience,
         "early_stopping_min_delta":args.early_stopping_min_delta,
         "best_metric":"segm_mAP",
-        "train_mask_note":"COCO train masks may be dilated; val/test masks are exact",
+        "mask_note":"COCO train/val dilation is recorded in each annotation file; test masks stay exact",
     }
     (output/"finetune_request.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return generated

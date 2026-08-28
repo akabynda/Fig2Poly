@@ -98,7 +98,10 @@ def convert_split(source: Path, output: Path, split: str,
                 )
                 annotation_id += 1
     payload = {
-        "info": {"description": "Fig2Poly visible curve instances"},
+        "info": {
+            "description": "Fig2Poly visible curve instances",
+            "mask_dilation": mask_dilation,
+        },
         "licenses": [],
         "categories": [{"id": 1, "name": category_name, "supercategory": "plot"}],
         "images": images,
@@ -121,16 +124,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--category-name", default="curve")
     parser.add_argument(
         "--train-mask-dilation",type=int,default=1,
-        help="Odd dilation kernel used only for train masks; val/test stay exact",
+        help="Odd dilation kernel used for train masks",
+    )
+    parser.add_argument(
+        "--val-mask-dilation",type=int,default=1,
+        help="Odd dilation kernel used for val masks; test always stays exact",
     )
     args = parser.parse_args(argv)
-    if args.train_mask_dilation<1 or args.train_mask_dilation%2==0:
-        parser.error("--train-mask-dilation must be a positive odd integer")
+    for name in ("train_mask_dilation", "val_mask_dilation"):
+        value = getattr(args, name)
+        if value < 1 or value % 2 == 0:
+            parser.error(f"--{name.replace('_', '-')} must be a positive odd integer")
+    split_dilations = {
+        "train": args.train_mask_dilation,
+        "val": args.val_mask_dilation,
+        "test": 1,
+    }
     results = [
         convert_split(
             args.source.resolve(),args.output.resolve(),split,
             category_name=args.category_name,
-            mask_dilation=args.train_mask_dilation if split=="train" else 1,
+            mask_dilation=split_dilations[split],
         )
         for split in ("train", "val", "test")
     ]

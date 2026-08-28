@@ -15,7 +15,8 @@ fi
   --source "$SOURCE" \
   --output "$OUTPUT" \
   --category-name line \
-  --train-mask-dilation "${LINEFORMER_TRAIN_MASK_WIDTH:-3}"
+  --train-mask-dilation "${LINEFORMER_TRAIN_MASK_WIDTH:-3}" \
+  --val-mask-dilation "${LINEFORMER_VAL_MASK_WIDTH:-1}"
 
 wc -l "$SOURCE/train.jsonl" "$SOURCE/val.jsonl" "$SOURCE/test.jsonl"
 echo "Prepared LineFormer COCO dataset at $OUTPUT"
