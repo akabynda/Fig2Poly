@@ -74,42 +74,55 @@ def install_early_stopping(
             )
             if not evaluated:
                 return
-            latest = self.trainer.storage.latest()
-            if metric not in latest:
-                raise RuntimeError(
-                    f"Early-stopping metric {metric!r} missing after validation; "
-                    f"available keys: {sorted(latest)}"
-                )
-            score = float(latest[metric][0])
-            improved = score > self.best_score + min_delta
-            if improved:
-                self.best_score = score
-                self.best_iteration = next_iteration
-                self.bad_epochs = 0
-                if comm.is_main_process():
-                    self.trainer.checkpointer.save(
-                        "model_best",
-                        iteration=next_iteration,
-                        early_stopping_metric=metric,
-                        early_stopping_score=score,
-                    )
-            else:
-                self.bad_epochs += 1
-            payload = {
-                "metric": metric,
-                "score": score,
-                "best_score": self.best_score,
-                "best_iteration": self.best_iteration,
-                "bad_epochs": self.bad_epochs,
-                "patience": patience,
-                "min_delta": min_delta,
-                "stopped": self.bad_epochs >= patience
-                and next_iteration < self.trainer.max_iter,
-            }
+            payload = None
             if comm.is_main_process():
-                target = Path(self.trainer.cfg.OUTPUT_DIR) / "early_stopping.json"
-                target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-                print(json.dumps({"early_stopping": payload}), flush=True)
+                latest = self.trainer.storage.latest()
+                if metric not in latest:
+                    payload = {
+                        "error": (
+                            f"Early-stopping metric {metric!r} missing after "
+                            f"validation; available keys: {sorted(latest)}"
+                        )
+                    }
+                else:
+                    score = float(latest[metric][0])
+                    improved = score > self.best_score + min_delta
+                    if improved:
+                        self.best_score = score
+                        self.best_iteration = next_iteration
+                        self.bad_epochs = 0
+                    else:
+                        self.bad_epochs += 1
+                    payload = {
+                        "metric": metric,
+                        "score": score,
+                        "best_score": self.best_score,
+                        "best_iteration": self.best_iteration,
+                        "bad_epochs": self.bad_epochs,
+                        "patience": patience,
+                        "min_delta": min_delta,
+                        "stopped": self.bad_epochs >= patience
+                        and next_iteration < self.trainer.max_iter,
+                    }
+                    if improved:
+                        self.trainer.checkpointer.save(
+                            "model_best",
+                            iteration=next_iteration,
+                            early_stopping_metric=metric,
+                            early_stopping_score=score,
+                        )
+                    target = Path(self.trainer.cfg.OUTPUT_DIR) / "early_stopping.json"
+                    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                    print(json.dumps({"early_stopping": payload}), flush=True)
+
+            gathered = comm.all_gather(payload)
+            payload = next(item for item in gathered if item is not None)
+            if "error" in payload:
+                raise RuntimeError(payload["error"])
+            if not comm.is_main_process():
+                self.best_score = float(payload["best_score"])
+                self.best_iteration = int(payload["best_iteration"])
+                self.bad_epochs = int(payload["bad_epochs"])
             if payload["stopped"]:
                 raise EarlyStoppingReached(
                     f"No {metric} improvement for {patience} validation epochs"
