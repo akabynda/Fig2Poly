@@ -113,8 +113,10 @@ def training_options(args, train_images: int) -> tuple[list[str], dict]:
             "auto_scale_lr": False,
             "best_checkpoint_metric": "segm/AP",
             "max_keep_checkpoints": 3,
-            "augmentation": "flip horizontal/vertical/none 0.3/0.3/0.4; fit and white-pad square",
-            "architecture_differences": "MaskDINO R50 losses, denoising and box refinement retained; no LineFormer source-specific shift/crop",
+            "augmentation": f"LineFormer source-specific geometry: PMC/Adobe flip + shift(0.3, dx/dy -51..50) + absolute crop(0.3, 435x435); LineEX/DSC flip; all fit and white-pad {image_size}",
+            "augmentation_source": "parent directory of prepared image path: pmc/adobe/lineex/dsc",
+            "mask_dilation": 0,
+            "architecture_differences": "MaskDINO R50 losses, denoising and box refinement retained; boxes recomputed and wholly clipped instances removed for box losses; LineFormer ignores boxes and retains empty masks",
         })
     return opts, summary
 
@@ -265,28 +267,10 @@ def install_training_profile(train_net, profile: str, log_interval: int | None) 
         def build_train_loader(cls, cfg):
             if profile != "lineformer":
                 return super().build_train_loader(cfg)
-            from detectron2.data import build_detection_train_loader, transforms as T
-            from maskdino import COCOInstanceNewBaselineDatasetMapper
+            from detectron2.data import build_detection_train_loader
+            from training.maskdino_source_augmentation import build_source_aware_mapper
 
-            class ExclusiveLineFlip(T.Augmentation):
-                def get_transform(self, image):
-                    sample = self._rand_range()
-                    if sample < 0.3:
-                        return T.HFlipTransform(image.shape[1])
-                    if sample < 0.6:
-                        return T.VFlipTransform(image.shape[0])
-                    return T.NoOpTransform()
-
-            size = cfg.INPUT.IMAGE_SIZE
-            mapper = COCOInstanceNewBaselineDatasetMapper(
-                is_train=True,
-                image_format=cfg.INPUT.FORMAT,
-                tfm_gens=[
-                    ExclusiveLineFlip(),
-                    T.ResizeScale(min_scale=1.0, max_scale=1.0, target_height=size, target_width=size),
-                    T.FixedSizeCrop(crop_size=(size, size), pad_value=255.0, seg_pad_value=0),
-                ],
-            )
+            mapper = build_source_aware_mapper(cfg)
             return build_detection_train_loader(cfg, mapper=mapper)
 
     train_net.Trainer = ProfileTrainer

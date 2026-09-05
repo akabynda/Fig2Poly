@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from training.prepare_lineformer_smoke import prepare_smoke
+from training.prepare_lineformer_smoke import prepare_dsc_preflight, prepare_smoke
 from training.train_lineformer import validate_dataset
 
 
@@ -83,3 +83,20 @@ def test_smoke_requires_ready_source_and_new_output(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="status=ready"):
         prepare_smoke(dataset, tmp_path / "missing")
     assert not (tmp_path / "missing").exists()
+
+
+def test_dsc_preflight_preserves_masks_and_routes_absolute_paths(tmp_path: Path) -> None:
+    from training.maskdino_source_augmentation import image_source
+
+    dataset = full_mixture(tmp_path)
+    output = tmp_path / "preflight"
+    summary = prepare_dsc_preflight(dataset, output)
+    validate_dataset(output)
+    assert summary["kind"] == "exact_dsc_runtime_preflight"
+    for split in ("train", "val", "test"):
+        before = json.loads((dataset / "annotations" / f"instances_{split}.json").read_text())
+        after = json.loads((output / "annotations" / f"instances_{split}.json").read_text())
+        selected = {item["id"] for item in after["images"]}
+        assert after["annotations"] == [item for item in before["annotations"] if item["image_id"] in selected]
+        assert all(image_source(item["file_name"]) == "dsc" for item in after["images"])
+        assert all(Path(item["file_name"]).is_file() for item in after["images"])

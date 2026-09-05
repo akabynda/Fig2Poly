@@ -12,16 +12,21 @@ LINEEX_RAW="${LINEFORMER_LINEEX_RAW:-$DATA_ROOT/public_lineex_v5/raw/lineex}"
 DSC_COCO="${LINEFORMER_DSC_COCO:-$DATA_ROOT/coco_lineformer_dsc_exact}"
 DSC_SOURCE="${DSC_DATASET:-$DATA_ROOT/dataset_dsc}"
 
-# Fresh download state avoids reusing old receipts for a test-only image subset.
-# Download ~11.6 GB of Adobe image archives plus metadata; keep only eligible
-# line/scatter-line images. Each new archive is deleted after checked extraction.
-# Existing raw benchmarks and the existing DSC COCO files remain read-only.
+# Reuse existing complete metadata via hardlinks; image shards use fresh state.
+# Existing raw benchmarks and DSC remain unchanged. To submit independent CPU
+# download and conversion stages, use --download-only, then --skip-download.
+case "${1:-}" in
+  --download-only)
+    exec bash "$FIG2POLY_ROOT/server/download_lineformer_adobe.sh"
+    ;;
+  --skip-download)
+    LINEFORMER_SKIP_ADOBE_DOWNLOAD=1
+    ;;
+  "") ;;
+  *) echo "Usage: $0 [--download-only|--skip-download]" >&2; exit 2 ;;
+esac
 if [[ "${LINEFORMER_SKIP_ADOBE_DOWNLOAD:-0}" != 1 ]]; then
-  "$PY" -m training.download_public_benchmarks \
-    --root "$ADOBE_DOWNLOAD_ROOT" \
-    --datasets adobe_synth19 \
-    --extract \
-    --delete-archives
+  bash "$FIG2POLY_ROOT/server/download_lineformer_adobe.sh"
 fi
 
 "$PY" -m training.prepare_lineformer_public \

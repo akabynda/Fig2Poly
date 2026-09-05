@@ -6,7 +6,9 @@ from collections import defaultdict
 import hashlib
 from itertools import islice
 import json
+import os
 from pathlib import Path
+import shutil
 
 import ijson
 
@@ -94,9 +96,56 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--dsc-preflight", action="store_true",
+                        help="Use a small exact-DSC subset while public downloads are in progress")
     args = parser.parse_args(argv)
-    print(json.dumps(prepare_smoke(args.dataset, args.output), indent=2))
+    if args.dsc_preflight:
+        result = prepare_dsc_preflight(args.dataset, args.output)
+    else:
+        result = prepare_smoke(args.dataset, args.output)
+    print(json.dumps(result, indent=2))
     return 0
+
+
+def prepare_dsc_preflight(dataset: Path, output: Path) -> dict:
+    dataset, output = dataset.resolve(strict=True), output.resolve()
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("Preflight output must be a new or empty directory")
+    summary = {"status": "ready", "kind": "exact_dsc_runtime_preflight",
+               "source_dataset": str(dataset), "splits": {}}
+    for split in SPLITS:
+        path = dataset / "annotations" / f"instances_{split}.json"
+        images = list(_items(path, "images", 16 if split == "train" else 4))
+        identifiers = {image["id"] for image in images}
+        with path.open("rb") as stream:
+            annotations = [item for item in ijson.items(stream, "annotations.item", use_float=True)
+                           if item["image_id"] in identifiers]
+        if not images or not annotations:
+            raise ValueError(f"No usable exact DSC preflight examples in {split}")
+        image_output = output / "images" / split / "dsc"
+        image_output.mkdir(parents=True, exist_ok=True)
+        for image in images:
+            original = (dataset / "images" / split / image["file_name"]).resolve(strict=True)
+            linked = image_output / f"{image['id']}_{original.name}"
+            try:
+                os.link(original, linked)
+            except OSError:
+                shutil.copy2(original, linked)
+            image["file_name"] = str(linked.resolve())
+            image["mixture_provenance"] = {"source": "dsc"}
+        with path.open("rb") as stream:
+            categories = next(ijson.items(stream, "categories", use_float=True))
+        (output / "images" / split).mkdir(parents=True, exist_ok=True)
+        (output / "annotations").mkdir(parents=True, exist_ok=True)
+        _atomic_json(output / "annotations" / f"instances_{split}.json", {
+            "info": {"description": "Exact DSC runtime preflight; masks unchanged"},
+            "licenses": [], "categories": categories, "images": images, "annotations": annotations,
+        })
+        summary["splits"][split] = {"images": len(images), "annotations": len(annotations),
+                                    "selected_image_ids": sorted(identifiers)}
+    summary["fingerprint"] = hashlib.sha256(_json_bytes(summary)).hexdigest()
+    _atomic_json(output / SUMMARY_NAME, summary)
+    return summary
 
 
 if __name__ == "__main__":

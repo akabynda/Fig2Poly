@@ -29,8 +29,13 @@ cd "$PROJECT_ROOT"
 OUTPUT="$RUNS_ROOT/lineformer_originals_dsc_exact_smoke_v1/$SLURM_JOB_ID"
 DATASET="$OUTPUT/dataset"
 record_run_metadata "$OUTPUT"
-"$FIG2POLY_STORAGE/.venvs/yolo/bin/python" -m training.prepare_lineformer_smoke \
-  --dataset "$DATA_ROOT/coco_lineformer_originals_dsc_exact_v1" --output "$DATASET"
+if [[ "${1:-}" == --preflight-dsc ]]; then
+  "$FIG2POLY_STORAGE/.venvs/yolo/bin/python" -m training.prepare_lineformer_smoke \
+    --dataset "$DATA_ROOT/coco_lineformer_dsc_exact" --output "$DATASET" --dsc-preflight
+else
+  "$FIG2POLY_STORAGE/.venvs/yolo/bin/python" -m training.prepare_lineformer_smoke \
+    --dataset "$DATA_ROOT/coco_lineformer_originals_dsc_exact_v1" --output "$DATASET"
+fi
 
 "$FIG2POLY_STORAGE/.venvs/lineformer/bin/python" -m training.train_mask2former_lineformer \
   --lineformer-root "$PROJECT_ROOT/third_party/LineFormer" \

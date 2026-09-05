@@ -43,12 +43,31 @@ def configure_logging(cfg,interval: int) -> None:
     cfg.log_config={"interval":interval,"hooks":[{"type":"TextLoggerHook"}]}
 
 
+def append_custom_import(cfg,module: str) -> None:
+    custom_imports=dict(cfg.get("custom_imports",{}) or {})
+    imports=custom_imports.get("imports",[])
+    imports=[imports] if isinstance(imports,str) else list(imports)
+    if module not in imports:
+        imports.append(module)
+    custom_imports.update(imports=imports,allow_failed_imports=False)
+    cfg.custom_imports=custom_imports
+
+
+def configure_training_pipeline(cfg,args: argparse.Namespace) -> list:
+    if not getattr(args,"original_source_augmentation",False):
+        return cfg.train_pipeline_LineEX
+    append_custom_import(cfg,"training.lineformer_source_pipeline")
+    return [{
+        "type":"SourceAwareLineFormerPipeline",
+        "pmc_adobe_pipeline":cfg.train_pipeline,
+        "lineex_dsc_pipeline":cfg.train_pipeline_LineEX,
+    }]
+
+
 def configure_early_stopping(cfg,args: argparse.Namespace) -> None:
     if args.early_stopping_patience == 0:
         return
-    cfg.custom_imports={
-        "imports":["training.lineformer_hooks"],"allow_failed_imports":False,
-    }
+    append_custom_import(cfg,"training.lineformer_hooks")
     hooks=list(cfg.get("custom_hooks",[]))
     hooks.append({
         "type":"ValidationEarlyStoppingHook",
@@ -73,7 +92,7 @@ def build_config(args: argparse.Namespace) -> Path:
     from mmcv import Config
 
     cfg=Config.fromfile(str(config_path))
-    train_pipeline=cfg.train_pipeline_LineEX
+    train_pipeline=configure_training_pipeline(cfg,args)
     test_pipeline=cfg.test_pipeline
     cfg.data={
         "samples_per_gpu":args.samples_per_gpu,
@@ -120,7 +139,13 @@ def build_config(args: argparse.Namespace) -> Path:
         "early_stopping_patience":args.early_stopping_patience,
         "early_stopping_min_delta":args.early_stopping_min_delta,
         "best_metric":"segm_mAP",
-        "mask_note":"COCO train/val dilation is recorded in each annotation file; test masks stay exact",
+        "original_source_augmentation":getattr(args,"original_source_augmentation",False),
+        "augmentation":("PMC/Adobe: original train_pipeline; LineEX/DSC: original train_pipeline_LineEX"
+                        if getattr(args,"original_source_augmentation",False)
+                        else "original train_pipeline_LineEX for all sources"),
+        "mask_note":("Source COCO masks preserved; no mask dilation in training pipeline"
+                     if getattr(args,"original_source_augmentation",False)
+                     else "COCO train/val dilation is recorded in each annotation file; test masks stay exact"),
     }
     (output/"finetune_request.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return generated
@@ -143,6 +168,8 @@ def main(argv: list[str]|None=None) -> int:
     parser.add_argument("--early-stopping-min-delta",type=float,default=0.0)
     parser.add_argument("--log-interval",type=int,default=50)
     parser.add_argument("--seed",type=int,default=20260903)
+    parser.add_argument("--original-source-augmentation",action="store_true",
+                        help="Route PMC/Adobe to original Shift/Crop pipeline and LineEX/DSC to LineEX pipeline; requires mixture provenance")
     parser.add_argument("--resume",action="store_true",help="Auto-resume from output/latest.pth")
     parser.add_argument("--dry-run",action="store_true",help="Write config without starting training")
     args=parser.parse_args(argv)
@@ -160,7 +187,7 @@ def main(argv: list[str]|None=None) -> int:
     root=args.lineformer_root.resolve(); train_py=root/"mmdetection"/"tools"/"train.py"
     env=os.environ.copy()
     env["PYTHONPATH"]=os.pathsep.join(
-        [str(root/"mmdetection"),str(root),env.get("PYTHONPATH","")]
+        [str(root/"mmdetection"),str(root),str(Path(__file__).resolve().parents[1]),env.get("PYTHONPATH","")]
     ).rstrip(os.pathsep)
     common=[str(train_py),str(generated),"--work-dir",str(args.output.resolve()),
             "--seed",str(args.seed)]

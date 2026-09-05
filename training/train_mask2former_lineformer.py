@@ -25,6 +25,7 @@ def training_arguments(args: argparse.Namespace) -> list[str]:
         "--log-interval", "1" if args.smoke_test else "100",
         "--early-stopping-patience", "0",
         "--seed", str(args.seed),
+        "--original-source-augmentation",
     ]
     if args.resume:
         command.append("--resume")
@@ -70,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         "early_stopping": False,
         "seed": args.seed,
         "smoke_test": args.smoke_test,
-        "augmentation": "original train_pipeline_LineEX for all mixture sources",
+        "augmentation": "PMC/Adobe: original train_pipeline; LineEX/DSC: original train_pipeline_LineEX",
+        "augmentation_source_field": "img_info.mixture_provenance.source",
+        "mask_processing": "source masks preserved; no dilation in training pipeline",
         "command_arguments": training_arguments(args),
     }
     (output / "lineformer_recipe_request.json").write_text(

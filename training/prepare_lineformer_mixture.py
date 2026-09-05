@@ -209,9 +209,11 @@ def _inspect_source(name: str, split: str, spec: dict, base: Path) -> SourceSpli
 def inspect_recipe(recipe_path: Path) -> tuple[dict, list[SourceSplit], str]:
     recipe_path = recipe_path.resolve(strict=True)
     recipe, _ = _load_json(recipe_path)
-    _keys(recipe, {"schema_version", "description", "sources"}, "recipe")
+    _keys(recipe, {"schema_version", "description", "sources", "metadata"}, "recipe")
     if recipe.get("schema_version", 1) != FORMAT_VERSION:
         raise ValueError("Unsupported recipe schema_version")
+    if "metadata" in recipe and not isinstance(recipe["metadata"], dict):
+        raise ValueError("Recipe metadata must be an object")
     sources = recipe.get("sources")
     if not isinstance(sources, list) or not sources:
         raise ValueError("Recipe must contain a nonempty sources list")
@@ -259,6 +261,8 @@ def inspect_recipe(recipe_path: Path) -> tuple[dict, list[SourceSplit], str]:
         "schema_version": FORMAT_VERSION, "description": recipe.get("description", ""),
         "sources": normalized_sources,
     }
+    if "metadata" in recipe:
+        normalized_recipe["metadata"] = recipe["metadata"]
     fingerprint = hashlib.sha256(_json_bytes({
         "recipe": normalized_recipe, "sources": [item.metadata for item in inspected],
     })).hexdigest()
@@ -470,6 +474,7 @@ def prepare_mixture(recipe_path: Path, output: Path) -> dict:
         summary = {
             "status": "ready", "format_version": FORMAT_VERSION, "fingerprint": fingerprint,
             "recipe_path": str(recipe_path), "recipe": normalized_recipe,
+            "source_recipe": normalized_recipe,
             "sources": [source.metadata for source in sources], "splits": results,
             "mask_processing": "none; source segmentation, bbox, area and iscrowd preserved",
             "category_mapping": {"line": 1, "curve": 1},

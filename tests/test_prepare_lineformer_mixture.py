@@ -227,3 +227,74 @@ def test_interrupted_mixture_rejects_changed_recipe(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="fingerprint changed"):
         mixture.prepare_mixture(recipe, output)
     assert not (output / mixture.SUMMARY_NAME).exists()
+
+
+@pytest.mark.parametrize("metadata", [None, [], "description", 1])
+def test_recipe_metadata_requires_an_object(tmp_path: Path, metadata) -> None:
+    recipe = write_recipe(tmp_path)
+    update_json(recipe, lambda data: data.update(metadata=metadata))
+    with pytest.raises(ValueError, match="metadata must be an object"):
+        mixture.prepare_mixture(recipe, tmp_path / "prepared")
+
+
+def test_public_recipe_with_actual_metadata_builds_mixture_then_smoke(tmp_path: Path, monkeypatch) -> None:
+    import training.prepare_lineformer_public as public
+    from training.prepare_lineformer_smoke import prepare_smoke
+    from training.train_lineformer import validate_dataset
+
+    prepared_public = tmp_path / "public"
+    raw = tmp_path / "raw"
+    dsc = tmp_path / "dsc"
+    roots = {
+        "pmc": {"train": raw / "pmc_train", "val": raw / "pmc_train", "test": raw / "pmc_test"},
+        "adobe": {"train": raw / "adobe/images", "val": raw / "adobe/images",
+                  "test": raw / "adobe/test_release/task6"},
+        "lineex": {split: raw / "lineex" / split / "images" for split in mixture.SPLITS},
+        "dsc": {split: dsc / "images" / split for split in mixture.SPLITS},
+    }
+    coco_roots = {name: dsc if name == "dsc" else prepared_public / name for name in roots}
+    for source, image_roots in roots.items():
+        for split, image_root in image_roots.items():
+            image_root.mkdir(parents=True, exist_ok=True)
+            (image_root / f"{split}.png").write_bytes(b"fixture-image")
+            annotation_path = coco_roots[source] / "annotations" / f"instances_{split}.json"
+            annotation_path.parent.mkdir(parents=True, exist_ok=True)
+            annotation_path.write_text(json.dumps({
+                "info": {"mask_dilation": 1}, "licenses": [], "categories": public.CATEGORIES,
+                "images": [{"id": 1, "file_name": f"{split}.png", "width": 8, "height": 8}],
+                "annotations": [{"id": 1, "image_id": 1, "category_id": 1,
+                                 "segmentation": [[1, 2, 4, 2, 4, 6, 1, 6]],
+                                 "bbox": [1, 2, 3, 4], "area": 12, "iscrowd": 0}],
+            }), encoding="utf-8")
+    # Raster conversion has its own tests; exercise the real producer's recipe
+    # and metadata construction using already prepared tiny COCO sources.
+    monkeypatch.setattr(public, "validate_dsc", lambda *args: {})
+    monkeypatch.setattr(public, "prepare_chartinfo", lambda *args: {})
+    monkeypatch.setattr(public, "prepare_lineex", lambda *args: {})
+    assert public.main([
+        "--pmc-train-root", str(roots["pmc"]["train"]), "--pmc-test-root", str(roots["pmc"]["test"]),
+        "--adobe-root", str(raw / "adobe"), "--lineex-root", str(raw / "lineex"),
+        "--dsc-coco", str(dsc), "--output", str(prepared_public),
+    ]) == 0
+    recipe_path = prepared_public / "recipe.json"
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    assert recipe["sources"] == [public.recipe_source(name, coco_roots[name], roots[name]) for name in roots]
+    assert recipe["metadata"]["line_width"] == 1
+    assert recipe["metadata"]["validation_fraction"] == 0.1
+    assert recipe["metadata"]["deviations_from_original"]
+
+    output = tmp_path / "mixture"
+    summary = mixture.prepare_mixture(recipe_path, output)
+    assert summary["recipe"]["metadata"] == summary["source_recipe"]["metadata"] == recipe["metadata"]
+    assert summary["splits"]["train"]["images"] == 53
+    assert summary["status"] == "ready"
+    smoke = tmp_path / "smoke"
+    smoke_summary = prepare_smoke(output, smoke)
+    validate_dataset(smoke)
+    assert smoke_summary["source_fingerprint"] == summary["fingerprint"]
+    for split in mixture.SPLITS:
+        assert smoke_summary["splits"][split]["source_images"] == {name: 1 for name in roots}
+    # Changes to provenance must not silently reuse a previous preparation.
+    update_json(recipe_path, lambda data: data["metadata"].update(line_width=2))
+    with pytest.raises(ValueError, match="fingerprint changed"):
+        mixture.prepare_mixture(recipe_path, output)

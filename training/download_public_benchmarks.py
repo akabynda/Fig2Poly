@@ -95,12 +95,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(asset: Asset, destination: Path, log_path: Path) -> Path:
+def download(asset: Asset, destination: Path, log_path: Path, workers: int = 1) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + ".part")
     if destination.is_file() and destination.stat().st_size == asset.size:
         log(log_path, f"reuse {asset.dataset}/{asset.filename} ({asset.size} bytes)")
         return destination
+    if workers > 1:
+        from training.parallel_download import parallel_download
+        return parallel_download(asset.url, destination, asset.size, workers=workers,
+                                 log=lambda message: log(log_path, message))
     if destination.exists():
         destination.unlink()
 
@@ -198,7 +202,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--extract", action="store_true")
     parser.add_argument("--delete-archives", action="store_true")
+    parser.add_argument("--download-workers", type=int, default=1,
+                        help="Parallel HTTP range workers per archive; default 1 preserves sequential downloads")
     args = parser.parse_args(argv)
+    if args.download_workers < 1:
+        parser.error("--download-workers must be positive")
 
     root = Path(args.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -231,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
         archive = root / "_archives" / asset.dataset / asset.filename
         log(log_path, f"start {asset.dataset}/{asset.filename}")
-        downloaded = download(asset, archive, log_path)
+        downloaded = download(asset, archive, log_path, workers=args.download_workers)
         digest = sha256(downloaded)
         entry = {**asdict(asset), "sha256": digest, "archive": str(downloaded)}
         entry["policy"] = policy

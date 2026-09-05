@@ -22,9 +22,12 @@ two-GPU smoke test covering training, evaluation and checkpoint writing.
 Initialization uses an ImageNet Swin-Tiny or ImageNet ResNet-50 backbone and a new
 segmentation head. The previously trained LineFormer, DSC and COCO segmentation
 checkpoints are not used. MaskDINO retains its own losses, denoising and box
-refinement. Both use the LineEX augmentation branch: exclusive horizontal and
-vertical flips with probabilities 0.3 and 0.3, then fixed resize/pad. The original
-PMC/Adobe-specific shift/crop branch is not used.
+refinement. Both use exclusive horizontal and vertical flips with probabilities
+0.3 and 0.3. PMC and Adobe additionally use the original random shifts (probability
+0.3, offsets from -51 through 50 pixels) and absolute 435-pixel crops (probability
+0.3), before fixed resize/pad. LineEX and DSC use the original LineEX branch without
+those extra transforms. MaskDINO recomputes boxes and removes empty transformed
+instances because it has box losses; Mask2Former follows the original mask pipeline.
 
 ## Data and masks
 
