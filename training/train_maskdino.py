@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import re
 import sys
 
 
@@ -11,6 +12,284 @@ CONFIGS = {
     "r50": "configs/coco/instance-segmentation/maskdino_R50_bs16_50ep_3s_dowsample1_2048.yaml",
     "swin_l": "configs/coco/instance-segmentation/swin/maskdino_R50_bs16_50ep_4s_dowsample1_2048.yaml",
 }
+
+
+def training_options(args, train_images: int) -> tuple[list[str], dict]:
+    """Resolve the optional LineFormer schedule without importing CUDA libraries."""
+    lineformer = args.training_profile == "lineformer"
+    global_batch = args.global_batch
+    if global_batch is None:
+        global_batch = 4 * args.num_gpus if lineformer else 2
+    image_size = args.image_size
+    if image_size is None:
+        image_size = 512 if lineformer else 1024
+    steps_per_epoch = math.ceil(train_images / global_batch)
+    max_iter = args.max_iter
+    if max_iter is None:
+        max_iter = 100000 if lineformer else max(1, steps_per_epoch * args.epochs)
+    checkpoint_period = args.checkpoint_period
+    if checkpoint_period is None:
+        checkpoint_period = 500 if lineformer else max(100, steps_per_epoch // 4)
+    eval_period = args.eval_period
+    if eval_period is None:
+        eval_period = 250 if lineformer else steps_per_epoch
+    learning_rate = args.base_lr
+    if learning_rate is None:
+        learning_rate = 1e-4 if lineformer else 1e-4 * global_batch / 16
+    log_interval = args.log_interval
+    if log_interval is None and lineformer:
+        log_interval = 100
+    if lineformer:
+        milestones = list(range(5000, max_iter, 5000))
+    else:
+        milestones = sorted({int(max_iter * .89), int(max_iter * .96)})
+        milestones = [step for step in milestones if 0 < step < max_iter]
+        if max_iter <= 2:
+            milestones = []
+    solver_steps = repr(tuple(milestones))
+    opts = [
+        "SOLVER.IMS_PER_BATCH", str(global_batch),
+        "SOLVER.BASE_LR", str(learning_rate),
+        "SOLVER.AMP.ENABLED", str(args.amp),
+        "SOLVER.MAX_ITER", str(max_iter),
+        "SOLVER.STEPS", solver_steps,
+        "SOLVER.CHECKPOINT_PERIOD", str(checkpoint_period),
+        "TEST.EVAL_PERIOD", str(eval_period),
+        "INPUT.IMAGE_SIZE", str(image_size),
+        "INPUT.MIN_SCALE", "1.0" if lineformer else "0.5",
+        "INPUT.MAX_SCALE", "1.0" if lineformer else "1.5",
+    ]
+    if lineformer:
+        opts.extend([
+            "SEED", str(getattr(args, "seed", None) if getattr(args, "seed", None) is not None else 20260905),
+            "MODEL.MaskDINO.NUM_OBJECT_QUERIES", "100",
+            "SOLVER.OPTIMIZER", "ADAMW",
+            "SOLVER.WEIGHT_DECAY", "0.05",
+            "SOLVER.WEIGHT_DECAY_NORM", "0.0",
+            "SOLVER.WEIGHT_DECAY_EMBED", "0.0",
+            "SOLVER.BACKBONE_MULTIPLIER", "0.2",
+            "SOLVER.REFERENCE_WORLD_SIZE", "0",
+            "SOLVER.LR_SCHEDULER_NAME", "WarmupMultiStepLR",
+            "SOLVER.GAMMA", "0.75",
+            "SOLVER.WARMUP_FACTOR", "1.0",
+            "SOLVER.WARMUP_ITERS", "10",
+            "SOLVER.WARMUP_METHOD", "linear",
+            "SOLVER.CLIP_GRADIENTS.ENABLED", "True",
+            "SOLVER.CLIP_GRADIENTS.CLIP_TYPE", "full_model",
+            "SOLVER.CLIP_GRADIENTS.CLIP_VALUE", "0.01",
+            "SOLVER.CLIP_GRADIENTS.NORM_TYPE", "2.0",
+            "INPUT.FORMAT", "RGB",
+            "INPUT.MIN_SIZE_TEST", str(image_size),
+            "INPUT.MAX_SIZE_TEST", str(image_size),
+            "TEST.DETECTIONS_PER_IMAGE", "100",
+        ])
+    summary = {
+        "training_profile": args.training_profile,
+        "train_images": train_images,
+        "epoch_based": False,
+        "iteration_budget_source": "profile" if lineformer else "epochs",
+        "steps_per_epoch": steps_per_epoch,
+        "max_iter": max_iter,
+        "checkpoint_period": checkpoint_period,
+        "eval_period": eval_period,
+        "log_interval": log_interval,
+        "solver_steps": milestones,
+        "global_batch": global_batch,
+        "images_per_gpu": global_batch // args.num_gpus,
+        "base_lr": learning_rate,
+        "image_size": image_size,
+    }
+    if args.max_iter is not None:
+        summary["iteration_budget_source"] = "max_iter"
+    if lineformer:
+        summary.update({
+            "optimizer": "AdamW",
+            "weight_decay": 0.05,
+            "backbone_lr_multiplier": 0.2,
+            "lr_gamma": 0.75,
+            "lr_step": 5000,
+            "gradient_clip_norm": 0.01,
+            "num_queries": 100,
+            "auto_scale_lr": False,
+            "best_checkpoint_metric": "segm/AP",
+            "max_keep_checkpoints": 3,
+            "augmentation": "flip horizontal/vertical/none 0.3/0.3/0.4; fit and white-pad square",
+            "architecture_differences": "MaskDINO R50 losses, denoising and box refinement retained; no LineFormer source-specific shift/crop",
+        })
+    return opts, summary
+
+
+def retain_periodic_checkpoints(output: Path, keep: int = 3) -> list[str]:
+    """Restore the retention queue after resume, excluding best/final artifacts."""
+    root = output.resolve()
+    candidates = []
+    for path in root.glob("model_*.pth"):
+        match = re.fullmatch(r"model_(\d+)\.pth", path.name)
+        if match and path.is_file():
+            if path.resolve().parent != root:
+                raise ValueError(f"Checkpoint resolves outside output directory: {path}")
+            candidates.append((int(match.group(1)), path))
+    candidates.sort(key=lambda item: item[0])
+    for _, path in candidates[:-keep]:
+        path.unlink()
+    return [str(path) for _, path in candidates[-keep:]]
+
+
+def profile_checkpoint_hooks(configured, trainer):
+    """Keep periodic checkpoints bounded and save the best model independently."""
+    from detectron2.checkpoint import DetectionCheckpointer
+    from detectron2.engine import hooks
+    from detectron2.utils import comm
+
+    class RetainedPeriodicCheckpointer(hooks.PeriodicCheckpointer):
+        def before_train(self):
+            super().before_train()
+            self.recent_checkpoints = retain_periodic_checkpoints(
+                Path(self.trainer.cfg.OUTPUT_DIR), self.max_to_keep
+            )
+
+    class BestOnlyCheckpointer(DetectionCheckpointer):
+        def tag_last_checkpoint(self, last_filename_basename):
+            # Auto-resume must follow the latest periodic training state.
+            pass
+
+    class BestSegmentationCheckpoint(hooks.HookBase):
+        def __init__(self):
+            self.best_score = None
+            self.best_iteration = None
+
+        def state_dict(self):
+            return {"best_score": self.best_score, "best_iteration": self.best_iteration}
+
+        def load_state_dict(self, state_dict):
+            self.best_score = state_dict.get("best_score")
+            self.best_iteration = state_dict.get("best_iteration")
+
+        def before_train(self):
+            output = Path(self.trainer.cfg.OUTPUT_DIR)
+            metadata = output / "best_checkpoint.json"
+            if metadata.is_file() and (output / "model_best.pth").is_file():
+                state = json.loads(metadata.read_text(encoding="utf-8"))
+                # A best checkpoint can be newer than the last periodic one.
+                if self.best_score is None or state["best_score"] > self.best_score:
+                    self.load_state_dict(state)
+            self.checkpointer = BestOnlyCheckpointer(
+                self.trainer.model,
+                self.trainer.cfg.OUTPUT_DIR,
+                trainer=self.trainer,
+            )
+
+        def save_if_improved(self):
+            latest = self.trainer.storage.latest().get("segm/AP")
+            if latest is None:
+                raise RuntimeError("Validation did not produce segm/AP for best checkpoint selection")
+            score = float(latest[0])
+            if not math.isfinite(score) or (self.best_score is not None and score <= self.best_score):
+                return
+            self.best_score = score
+            # Detectron2 checkpoint iteration fields are zero-based.
+            self.best_iteration = int(latest[1])
+            self.checkpointer.save(
+                "model_best", iteration=self.best_iteration,
+                best_metric="segm/AP", best_score=score,
+            )
+            output = Path(self.trainer.cfg.OUTPUT_DIR)
+            temporary = output / "best_checkpoint.json.tmp"
+            temporary.write_text(json.dumps({
+                **self.state_dict(), "metric": "segm/AP",
+                "completed_iterations": self.best_iteration + 1,
+            }, indent=2), encoding="utf-8")
+            temporary.replace(output / "best_checkpoint.json")
+
+        def after_step(self):
+            period = self.trainer.cfg.TEST.EVAL_PERIOD
+            next_iteration = self.trainer.iter + 1
+            if period > 0 and next_iteration % period == 0 and next_iteration < self.trainer.max_iter:
+                self.save_if_improved()
+
+        def after_train(self):
+            if self.trainer.iter + 1 >= self.trainer.max_iter:
+                self.save_if_improved()
+
+    result = []
+    for hook in configured:
+        if isinstance(hook, hooks.PeriodicCheckpointer):
+            hook = RetainedPeriodicCheckpointer(
+                trainer.checkpointer, trainer.cfg.SOLVER.CHECKPOINT_PERIOD,
+                max_to_keep=3,
+            )
+        result.append(hook)
+        if isinstance(hook, hooks.EvalHook) and trainer.cfg.DATASETS.TEST and comm.is_main_process():
+            result.append(BestSegmentationCheckpoint())
+    return result
+
+
+def install_training_profile(train_net, profile: str, log_interval: int | None) -> None:
+    """Install runtime-only hooks in each distributed worker, leaving upstream intact."""
+    if profile != "lineformer" and log_interval is None:
+        return
+    from detectron2.engine import hooks
+
+    upstream_trainer = train_net.Trainer
+
+    class ProfileTrainer(upstream_trainer):
+        def build_hooks(self):
+            configured = super().build_hooks()
+            if profile == "lineformer":
+                configured = profile_checkpoint_hooks(configured, self)
+            if log_interval is not None:
+                for hook in configured:
+                    if isinstance(hook, hooks.PeriodicWriter):
+                        hook._period = log_interval
+            return configured
+
+        @classmethod
+        def build_optimizer(cls, cfg, model):
+            optimizer = super().build_optimizer(cfg, model)
+            if profile == "lineformer":
+                # Upstream already exempts nn.Embedding and normalization modules.
+                # Its standalone level_embed parameter also needs zero decay.
+                no_decay = {
+                    id(value) for name, value in model.named_parameters()
+                    if any(key in name for key in ("query_embed", "query_feat", "level_embed"))
+                }
+                for group in optimizer.param_groups:
+                    exempt = [id(value) in no_decay for value in group["params"]]
+                    if any(exempt):
+                        if not all(exempt):
+                            raise RuntimeError("Mixed MaskDINO parameter group cannot preserve embedding decay")
+                        group["weight_decay"] = 0.0
+            return optimizer
+
+        @classmethod
+        def build_train_loader(cls, cfg):
+            if profile != "lineformer":
+                return super().build_train_loader(cfg)
+            from detectron2.data import build_detection_train_loader, transforms as T
+            from maskdino import COCOInstanceNewBaselineDatasetMapper
+
+            class ExclusiveLineFlip(T.Augmentation):
+                def get_transform(self, image):
+                    sample = self._rand_range()
+                    if sample < 0.3:
+                        return T.HFlipTransform(image.shape[1])
+                    if sample < 0.6:
+                        return T.VFlipTransform(image.shape[0])
+                    return T.NoOpTransform()
+
+            size = cfg.INPUT.IMAGE_SIZE
+            mapper = COCOInstanceNewBaselineDatasetMapper(
+                is_train=True,
+                image_format=cfg.INPUT.FORMAT,
+                tfm_gens=[
+                    ExclusiveLineFlip(),
+                    T.ResizeScale(min_scale=1.0, max_scale=1.0, target_height=size, target_width=size),
+                    T.FixedSizeCrop(crop_size=(size, size), pad_value=255.0, seg_pad_value=0),
+                ],
+            )
+            return build_detection_train_loader(cfg, mapper=mapper)
+
+    train_net.Trainer = ProfileTrainer
 
 
 def image_count(dataset: Path, split: str) -> int:
@@ -165,11 +444,14 @@ def worker(
     curve_metrics: bool,
     curve_score_threshold: float,
     curve_sample_interval: int,
+    training_profile: str = "legacy",
+    log_interval: int | None = None,
 ):
     register_datasets(dataset)
     import train_net
     from detectron2.utils import comm
 
+    install_training_profile(train_net, training_profile, log_interval)
     if curve_loss_weight > 0:
         from training.maskdino_curve_loss import install_curve_geometry_loss
 
@@ -193,19 +475,25 @@ def worker(
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Train official MaskDINO on Fig2Poly COCO RLE")
     parser.add_argument("--maskdino-root", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--variant", choices=CONFIGS, required=True)
     parser.add_argument("--weights", type=Path, required=True)
+    parser.add_argument(
+        "--training-profile", choices=("legacy", "lineformer"), default="legacy",
+        help="lineformer: 100k iterations, 4 images/GPU, fixed LR 1e-4, 512px, 100 queries",
+    )
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--global-batch", type=int, default=2)
+    parser.add_argument("--global-batch", type=int, help="Default: legacy=2, lineformer=4*num-gpus")
     parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument("--seed", type=int, help="LineFormer profile defaults to 20260905")
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--image-size", type=int, default=1024)
+    parser.add_argument("--image-size", type=int, help="Default: legacy=1024, lineformer=512")
     parser.add_argument("--base-lr", type=float)
+    parser.add_argument("--log-interval", type=int, help="Writer period; LineFormer profile defaults to 100")
     parser.add_argument(
         "--amp",
         action="store_true",
@@ -214,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-iter",
         type=int,
-        help="Override the epoch-derived iteration count (used by smoke tests)",
+        help="Override the profile or epoch-derived iteration budget (also for smoke tests)",
     )
     parser.add_argument(
         "--checkpoint-period",
@@ -259,32 +547,44 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.disable_evaluation and args.early_stopping_patience:
         parser.error("--disable-evaluation is incompatible with early stopping")
+    for name in ("num_gpus", "global_batch", "image_size", "epochs", "max_iter", "checkpoint_period", "log_interval", "base_lr"):
+        value = getattr(args, name)
+        if value is not None and value <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
+    if args.eval_period is not None and args.eval_period < 0:
+        parser.error("--eval-period must be nonnegative")
+    if args.global_batch is not None and args.global_batch % args.num_gpus:
+        parser.error("--global-batch must be divisible by --num-gpus")
+    if args.training_profile == "lineformer":
+        if args.variant != "r50":
+            parser.error("the lineformer training profile currently supports --variant r50")
+        if args.early_stopping_patience or args.curve_loss_weight:
+            parser.error("the lineformer profile requires early stopping and auxiliary curve loss disabled")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     maskdino_root = args.maskdino_root.resolve()
     dataset = args.dataset.resolve()
     config = maskdino_root / CONFIGS[args.variant]
     if not config.is_file():
-        parser.error(f"MaskDINO config not found: {config}")
+        raise FileNotFoundError(f"MaskDINO config not found: {config}")
     if not args.weights.is_file() and not args.resume:
-        parser.error(f"pretrained checkpoint not found: {args.weights}")
+        raise FileNotFoundError(f"pretrained checkpoint not found: {args.weights}")
     from training.patch_maskdino_numerics import patch_matcher
 
     patch_matcher(maskdino_root)
+    if args.training_profile == "lineformer":
+        from training.patch_maskdino_rle import main as patch_rle_mapper
+
+        patch_rle_mapper(["--maskdino-root", str(maskdino_root)])
     sys.path.insert(0, str(maskdino_root))
     import train_net
     from detectron2.engine import launch
 
-    steps_per_epoch = math.ceil(image_count(dataset, "train") / args.global_batch)
-    max_iter = args.max_iter or max(1, steps_per_epoch * args.epochs)
-    checkpoint_period = args.checkpoint_period or max(100, steps_per_epoch // 4)
-    eval_period = steps_per_epoch if args.eval_period is None else args.eval_period
-    learning_rate = args.base_lr or 1e-4 * args.global_batch / 16
-    if max_iter <= 2:
-        solver_steps = "()"
-    else:
-        milestones = sorted({int(max_iter * .89), int(max_iter * .96)})
-        milestones = [step for step in milestones if 0 < step < max_iter]
-        solver_steps = f"({', '.join(str(step) for step in milestones)},)"
+    schedule_opts, schedule_summary = training_options(args, image_count(dataset, "train"))
     opts = [
         "MODEL.WEIGHTS", str(args.weights.resolve()),
         "MODEL.SEM_SEG_HEAD.NUM_CLASSES", "1",
@@ -293,18 +593,9 @@ def main(argv: list[str] | None = None) -> int:
         "()" if args.disable_evaluation else f'("fig2poly_{args.eval_split}",)',
         "DATALOADER.FILTER_EMPTY_ANNOTATIONS", "False",
         "DATALOADER.NUM_WORKERS", str(args.workers),
-        "SOLVER.IMS_PER_BATCH", str(args.global_batch),
-        "SOLVER.BASE_LR", str(learning_rate),
-        "SOLVER.AMP.ENABLED", str(args.amp),
-        "SOLVER.MAX_ITER", str(max_iter),
-        "SOLVER.STEPS", solver_steps,
-        "SOLVER.CHECKPOINT_PERIOD", str(checkpoint_period),
-        "TEST.EVAL_PERIOD", str(eval_period),
-        "INPUT.IMAGE_SIZE", str(args.image_size),
-        "INPUT.MIN_SCALE", "0.5",
-        "INPUT.MAX_SCALE", "1.5",
         "OUTPUT_DIR", str(args.output.resolve()),
     ]
+    opts.extend(schedule_opts)
     command = ["--config-file", str(config), "--num-gpus", str(args.num_gpus)]
     if args.resume:
         command.append("--resume")
@@ -312,33 +603,30 @@ def main(argv: list[str] | None = None) -> int:
         command.append("--eval-only")
     command.extend(opts)
     upstream_args = train_net.default_argument_parser().parse_args(command)
-    print(
-        json.dumps(
-            {
-                "variant": args.variant,
-                "train_images": image_count(dataset, "train"),
-                "steps_per_epoch": steps_per_epoch,
-                "max_iter": max_iter,
-                "checkpoint_period": checkpoint_period,
-                "eval_period": eval_period,
-                "solver_steps": solver_steps,
-                "early_stopping_patience": args.early_stopping_patience,
-                "early_stopping_metric": args.early_stopping_metric,
-                "early_stopping_min_delta": args.early_stopping_min_delta,
-                "evaluation_enabled": not args.disable_evaluation,
-                "global_batch": args.global_batch,
-                "base_lr": learning_rate,
-                "amp": args.amp,
-                "resume": args.resume,
-                "curve_loss_weight": args.curve_loss_weight,
-                "curve_metrics": args.curve_metrics,
-                "curve_score_threshold": args.curve_score_threshold,
-                "curve_sample_interval": args.curve_sample_interval,
-            },
-            indent=2,
-        ),
-        flush=True,
-    )
+    summary = {
+        "variant": args.variant,
+        **schedule_summary,
+        "dataset": str(dataset),
+        "initial_weights": str(args.weights.resolve()),
+        "upstream_config": str(config),
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_metric": args.early_stopping_metric,
+        "early_stopping_min_delta": args.early_stopping_min_delta,
+        "evaluation_enabled": not args.disable_evaluation,
+        "amp": args.amp,
+        "resume": args.resume,
+        "curve_loss_weight": args.curve_loss_weight,
+        "curve_metrics": args.curve_metrics,
+        "curve_score_threshold": args.curve_score_threshold,
+        "curve_sample_interval": args.curve_sample_interval,
+    }
+    print(json.dumps(summary, indent=2), flush=True)
+    if args.training_profile == "lineformer":
+        args.output.mkdir(parents=True, exist_ok=True)
+        (args.output / "training_profile.json").write_text(
+            json.dumps({**summary, "config_overrides": dict(zip(opts[::2], opts[1::2]))}, indent=2),
+            encoding="utf-8",
+        )
     launch(
         worker,
         args.num_gpus,
@@ -356,6 +644,8 @@ def main(argv: list[str] | None = None) -> int:
             args.curve_metrics,
             args.curve_score_threshold,
             args.curve_sample_interval,
+            args.training_profile,
+            schedule_summary["log_interval"],
         ),
     )
     return 0
