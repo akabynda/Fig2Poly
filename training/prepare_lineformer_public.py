@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from training.convert_coco_instances import coco_counts
+from training.adobe_release import ADOBE_V1_MISSING_LINE_IMAGES
 from training.convert_public_instances import (
     chartinfo_lines,
     chartinfo_occlusion_mask,
@@ -161,7 +162,10 @@ def prepare_chartinfo(
     raw_root: Path, annotation_root: Path | None, output: Path,
     source: str, official_split: str, validation_fraction: float, line_width: int,
 ) -> dict:
-    pairs = find_chartinfo_pairs(raw_root, annotation_root=annotation_root)
+    allowed_missing = (ADOBE_V1_MISSING_LINE_IMAGES
+                       if source == "adobe" and official_split == "train" else frozenset())
+    pairs = find_chartinfo_pairs(raw_root, annotation_root=annotation_root,
+                                allowed_missing_stems=allowed_missing)
     names = [path.stem for path, _ in pairs]
     if len(names) != len(set(names)):
         raise ValueError(f"Duplicate ChartInfo annotation stems in {raw_root}")
@@ -174,6 +178,11 @@ def prepare_chartinfo(
         "validation_fraction": validation_fraction, "line_width": line_width,
         "mask_semantics": "polyline proxy; annotated text/legend occlusions removed",
     }
+    if allowed_missing and annotation_root is not None:
+        settings["excluded_missing_image_stems"] = sorted(
+            stem for stem in allowed_missing - set(names)
+            if (annotation_root / f"{stem}.json").is_file()
+        )
     targets = {split: output / "annotations" / f"instances_{split}.json" for split in splits}
     receipt_path = output / f"prepare_{official_split}.json"
     cached = cached_result(receipt_path, settings, list(targets.values()))

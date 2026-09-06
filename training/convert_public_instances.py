@@ -46,6 +46,7 @@ def find_chartinfo_pairs(
     annotation_path_contains: str | None = None,
     annotation_root: Path | None = None,
     chart_types: set[str] | None = None,
+    allowed_missing_stems: frozenset[str] = frozenset(),
 ) -> list[tuple[Path, Path]]:
     if annotation_root is not None:
         search_root = annotation_root
@@ -76,12 +77,16 @@ def find_chartinfo_pairs(
         if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and path.stem in required:
             image_index.setdefault(path.stem, path)
     missing = required - image_index.keys()
-    if missing:
-        examples = ", ".join(sorted(missing)[:5])
+    unexpected_missing = missing - allowed_missing_stems
+    if unexpected_missing:
+        examples = ", ".join(sorted(unexpected_missing)[:5])
         raise RuntimeError(
-            f"Missing {len(missing)} eligible line-chart images in {raw_root}; examples: {examples}"
+            f"Missing {len(unexpected_missing)} eligible line-chart images in {raw_root}; examples: {examples}"
         )
-    pairs = [(annotation, image_index[annotation.stem]) for annotation in eligible_annotations]
+    if missing:
+        print(f"Documented unavailable images in {raw_root}: {sorted(missing)}", flush=True)
+    pairs = [(annotation, image_index[annotation.stem]) for annotation in eligible_annotations
+             if annotation.stem in image_index]
     if not pairs:
         raise RuntimeError(f"No line-chart image/JSON pairs found in {raw_root}")
     return pairs

@@ -14,6 +14,7 @@ import zipfile
 import requests
 
 from training.convert_public_instances import eligible_chartinfo_stems
+from training.adobe_release import ADOBE_V1_MISSING_LINE_IMAGES
 
 @dataclass(frozen=True)
 class Asset:
@@ -152,6 +153,65 @@ def adobe_line_image_members(annotation_root: Path) -> set[str]:
     return selected
 
 
+def validate_adobe_images(root: Path, expected: set[str]) -> dict:
+    image_root = root / "raw" / "adobe_synth19" / "images"
+    found = {
+        path.stem for path in image_root.rglob("*")
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        and not path.name.startswith("._") and path.is_file()
+    }
+    missing = expected - found
+    unexpected = missing - ADOBE_V1_MISSING_LINE_IMAGES
+    if unexpected:
+        raise RuntimeError(
+            f"Adobe extraction incomplete: {len(unexpected)} eligible images missing; "
+            f"examples: {', '.join(sorted(unexpected)[:5])}"
+        )
+    audit = {"eligible_annotations": len(expected), "available_images": len(expected & found),
+             "excluded_missing_image_stems": sorted(missing)}
+    write_json_atomic(root / "adobe_line_image_audit.json", audit)
+    return audit
+
+
+def recover_adobe_receipts(root: Path, assets: list[Asset], log_path: Path) -> None:
+    """Recover completed extraction after final pair validation interrupted a run.
+
+    The old manifest is retained until all ten shard records and the extracted
+    image set have been validated. Never infer completion from directory existence.
+    """
+    shards = [asset for asset in ASSETS
+              if asset.dataset == "adobe_synth19" and asset.filename.startswith("images_")]
+    if not set(shards).issubset(assets):
+        return
+    receipt_paths = [root / "_state" / a.dataset / f"{a.filename}.json" for a in shards]
+    if all(path.is_file() for path in receipt_paths):
+        return
+    manifest_path = root / "download_manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = {entry.get("filename"): entry for entry in manifest.get("assets", [])}
+    recovered = []
+    extract_root = root / "raw" / "adobe_synth19"
+    for asset, receipt_path in zip(shards, receipt_paths):
+        entry = entries.get(asset.filename, {})
+        if not (entry.get("url") == asset.url and entry.get("size") == asset.size
+                and entry.get("policy") == extraction_policy(asset, True)
+                and entry.get("completed") and entry.get("extracted_files", 0) > 0
+                and entry.get("extracted_to") == str(extract_root)
+                and len(entry.get("sha256", "")) == 64):
+            return
+        recovered.append((receipt_path, entry))
+    log(log_path, "validate previous complete Adobe extraction before recovering receipts")
+    expected = adobe_line_image_members(extract_root / "json_gt")
+    audit = validate_adobe_images(root, expected)
+    if audit["available_images"] != sum(entry["extracted_files"] for _, entry in recovered):
+        raise RuntimeError("Adobe image count differs from completed extraction manifest")
+    for path, entry in recovered:
+        write_json_atomic(path, {**entry, "pair_validation": audit})
+    log(log_path, f"recovered all Adobe image receipts; pair audit: {audit}")
+
+
 def safe_extract(
     archive: Path,
     output: Path,
@@ -218,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             item.strip() for item in args.asset_splits.split(",") if item.strip()
         }
         assets = [asset for asset in assets if asset.split in selected_splits]
+    if args.extract:
+        recover_adobe_receipts(root, assets, log_path)
     manifest = {"started": time.time(), "assets": []}
     adobe_line_stems: set[str] | None = None
     pending_adobe_image_receipts: list[tuple[Path, dict]] = []
@@ -273,23 +335,10 @@ def main(argv: list[str] | None = None) -> int:
         write_json_atomic(root / "download_manifest.json", manifest)
         log(log_path, f"complete {asset.dataset}/{asset.filename} sha256={digest}")
     if adobe_line_stems is not None:
-        image_root = root / "raw" / "adobe_synth19" / "images"
-        extracted_stems = {
-            path.stem
-            for path in image_root.rglob("*")
-            if path.is_file()
-            and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
-            and not path.name.startswith("._")
-        }
-        missing = adobe_line_stems - extracted_stems
-        if missing:
-            examples = ", ".join(sorted(missing)[:5])
-            raise RuntimeError(
-                f"Adobe extraction incomplete: {len(missing)} eligible images missing; "
-                f"examples: {examples}"
-            )
+        audit = validate_adobe_images(root, adobe_line_stems)
+        log(log_path, f"Adobe pair audit: {audit}")
         for receipt_path, entry in pending_adobe_image_receipts:
-            write_json_atomic(receipt_path, entry)
+            write_json_atomic(receipt_path, {**entry, "pair_validation": audit})
     manifest["completed"] = time.time()
     write_json_atomic(root / "download_manifest.json", manifest)
     return 0

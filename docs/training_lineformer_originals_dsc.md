@@ -35,6 +35,13 @@ instances because it has box losses; Mask2Former follows the original mask pipel
   remaining training images repeated 50 times, matching the original weighting.
 - AdobeSynth: all eligible line/scatter-line charts from the official training
   release, with a deterministic 10% validation holdout; train repetition 1.
+  The completed ten-shard extraction contains 41,874 eligible images and seven
+  orphan line annotations: `162724`, `168329`, `176337`, `182570`, `187288`,
+  `192989`, `196163`. Only these missing pairs may be excluded; any other missing
+  image fails preparation. Available images with these IDs are always included.
+  `adobe_line_image_audit.json` records actual exclusions and the download manifest
+  records archive sizes, SHA256 hashes and extraction counts. The converter also
+  records exclusions in the Adobe training receipt and COCO metadata.
 - LineEX: all available official training images (400,000 released), with its
   official validation and test splits; train repetition 1.
 - DSC: the existing `coco_lineformer_dsc_exact` corresponding to `dataset_dsc`
