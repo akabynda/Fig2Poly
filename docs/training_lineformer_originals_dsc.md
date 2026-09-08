@@ -29,6 +29,76 @@ refinement. Both use exclusive horizontal and vertical flips with probabilities
 those extra transforms. MaskDINO recomputes boxes and removes empty transformed
 instances because it has box losses; Mask2Former follows the original mask pipeline.
 
+## Loss functions and weights
+
+Verified on 2026-09-09 against the saved full Mask2Former configuration, the saved
+MaskDINO R50 smoke configuration, and the deployed loss implementations. The
+MaskDINO full-training profile uses the same loss settings as the smoke run;
+the smoke run overrides iteration, evaluation, checkpoint and logging intervals.
+
+| Component | Mask2Former Swin-Tiny / LineFormer | MaskDINO R50 |
+| --- | --- | --- |
+| Classification | Softmax cross-entropy, `loss_cls`, weight **1** | Sigmoid focal loss, `loss_ce`, weight **4**, alpha **0.25**, gamma **2** |
+| Mask pixels | Binary cross-entropy with logits, `loss_mask`, weight **5** | Binary cross-entropy with logits, `loss_mask`, weight **5** |
+| Mask overlap | Sigmoid Dice, `loss_dice`, weight **5**, naive Dice with smoothing **1** | Sigmoid Dice, `loss_dice`, weight **5**, smoothing **1** |
+| Box coordinates | No box loss | L1 on normalized center-x/center-y/width/height, `loss_bbox`, weight **5** |
+| Box overlap | No box loss | `1 - GIoU`, `loss_giou`, weight **2** |
+
+Thus the final prediction's weighted loss is:
+
+```text
+Mask2Former: 1 * CE_class + 5 * BCE_mask + 5 * Dice_mask
+MaskDINO:    4 * Focal_class + 5 * BCE_mask + 5 * Dice_mask
+             + 5 * L1_box + 2 * GIoU_box
+```
+
+The total training loss also sums auxiliary prediction losses:
+
+- Mask2Former supervises the initial prediction and all nine decoder layers.
+  The final layer uses `loss_cls`, `loss_mask`, `loss_dice`; the preceding nine
+  prediction sets use `d0.*` through `d8.*`, with the same component weights.
+  Classification class weights are `[1.0, 0.1]` for `line` and `no-object`.
+- MaskDINO has `DEEP_SUPERVISION=True`, `DEC_LAYERS=9`, `INITIAL_PRED=True`,
+  `TWO_STAGE=True`. Auxiliary decoder predictions and intermediate two-stage
+  predictions receive the corresponding component weights, without an additional
+  discount. Denoising is enabled as `DN=seg`, `DN_NUM=100`, `DN_NOISE_SCALE=0.4`;
+  its classification, mask and box losses also use the weights above. The saved
+  `NO_OBJECT_WEIGHT=0.1` belongs to the alternative softmax CE branch; the active
+  instance-classification branch uses focal loss (`SEMANTIC_CE_LOSS=False`).
+
+Both models sample **12,544 mask points**, with oversampling ratio **3.0** and
+importance sampling ratio **0.75**. MaskDINO's `loss_mask` is BCE, even though an
+upstream method docstring calls it focal loss. Focal loss is used for classification.
+The custom centerline/tangent curve loss is disabled (`curve_loss_weight=0`).
+
+Hungarian matching costs are separate from the optimized loss weights:
+
+| Matching cost | Mask2Former | MaskDINO |
+| --- | --- | --- |
+| Class / mask BCE / Dice | **2 / 5 / 5** | **4 / 5 / 5** |
+| Box L1 / GIoU | Not used | **5 / 2** |
+
+Implementation sources are `third_party/LineFormer/lineformer_swin_t_config.py`,
+the vendored MMDetection `mask2former_head.py` and `maskformer_head.py`, and
+`third_party/MaskDINO/maskdino/maskdino.py` plus `modeling/criterion.py` on the server.
+The training wrappers preserve these losses. Their shared LineFormer profile
+sets the training schedule, data pipeline and query count.
+
+## Saved configurations
+
+The server run root is `/mnt/tank/scratch/devdokimov/Fig2Poly_runs`.
+
+| Run subdirectory | Saved files |
+| --- | --- |
+| `mask2former_swin_t_lineformer_originals_dsc_exact_100k_v1` | `lineformer_dsc_finetune_config.py`: resolved model, losses, optimizer, schedule and data pipeline; `lineformer_recipe_request.json` and `finetune_request.json`: launch arguments |
+| `maskdino_r50_lineformer_originals_dsc_exact_100k_v1` | `config.yaml`: resolved Detectron2/MaskDINO configuration; `training_profile.json`: schedule and overrides; written when this queued training starts |
+| `lineformer_originals_dsc_exact_smoke_v1/11713/maskdino` | Existing `config.yaml` and `training_profile.json` from the successful smoke run; loss settings match the full profile, but its schedule is only two iterations |
+
+Full runs also save `mixture_summary.json` and `fig2poly_git_sha.txt`. The historical
+filename `lineformer_dsc_finetune_config.py` is shared with the older wrapper; its
+name does not imply fine-tuning from the old DSC checkpoint. This experiment uses
+ImageNet backbone initialization and a new segmentation head.
+
 ## Data and masks
 
 - PMC: official training release with deterministic 10% validation holdout;
