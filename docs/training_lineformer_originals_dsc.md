@@ -152,3 +152,11 @@ trainer process group and requeue from the latest checkpoint. Resumption restore
 optimizer/scheduler progress, but does not promise bitwise identical augmentation
 randomness across interruptions. A full validation every 250 steps can contribute
 substantial runtime on this combined dataset.
+
+MaskDINO's server launcher uses a 180-minute distributed communication timeout
+(`MASKDINO_DISTRIBUTED_TIMEOUT_MINUTES` can override it). The original 30-minute
+timeout was exceeded when one validation rank finished at 00:02 and the other
+at 00:34 on 2026-09-21. This is an execution setting; the validation batch, data,
+250-step interval, losses and training schedule are preserved. The resolved
+timeout is recorded in `training_profile.json`. Resume uses `last_checkpoint`
+and restores the optimizer, scheduler and training iteration from that file.

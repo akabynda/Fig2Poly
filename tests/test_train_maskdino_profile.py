@@ -1,4 +1,5 @@
 import ast
+from datetime import timedelta
 import json
 import sys
 from pathlib import Path
@@ -89,10 +90,60 @@ def test_explicit_smoke_overrides_do_not_leave_out_of_budget_lr_steps():
     ["--num-gpus", "0"],
     ["--max-iter", "0"],
     ["--base-lr", "0"],
+    ["--distributed-timeout-minutes", "0"],
+    ["--distributed-timeout-minutes", "-1"],
 ])
 def test_invalid_profile_combinations_fail_before_importing_cuda(extra):
     with pytest.raises(SystemExit):
         parse_args(BASE_ARGS + ["--training-profile", "lineformer"] + extra)
+
+
+def test_timeout_reaches_distributed_launcher_without_changing_training_recipe(monkeypatch, tmp_path):
+    from training import train_maskdino
+
+    default_opts, default_summary = resolve("--training-profile", "lineformer", "--num-gpus", "2")
+    changed_opts, changed_summary = resolve(
+        "--training-profile", "lineformer", "--num-gpus", "2",
+        "--distributed-timeout-minutes", "180",
+    )
+    assert changed_opts == default_opts
+    assert changed_summary == default_summary
+
+    upstream = tmp_path / "upstream"
+    config = upstream / train_maskdino.CONFIGS["r50"]
+    config.parent.mkdir(parents=True)
+    config.write_text("fixture")
+    dataset = tmp_path / "dataset"
+    (dataset / "annotations").mkdir(parents=True)
+    (dataset / "annotations/instances_train.json").write_text(json.dumps({"images": [{"id": 1}]}))
+    output = tmp_path / "output"
+    parsed_commands = []
+    launches = []
+
+    def parse_upstream(command):
+        parsed_commands.append(command)
+        return SimpleNamespace(dist_url="auto")
+
+    monkeypatch.setattr("training.patch_maskdino_numerics.patch_matcher", lambda root: None)
+    monkeypatch.setattr("training.patch_maskdino_rle.main", lambda args: None)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setitem(sys.modules, "train_net", SimpleNamespace(
+        default_argument_parser=lambda: SimpleNamespace(parse_args=parse_upstream)))
+    monkeypatch.setitem(sys.modules, "detectron2.engine", SimpleNamespace(
+        launch=lambda *args, **kwargs: launches.append((args, kwargs))))
+
+    assert train_maskdino.main([
+        "--maskdino-root", str(upstream), "--dataset", str(dataset),
+        "--output", str(output), "--variant", "r50", "--weights", str(tmp_path / "unused.pkl"),
+        "--training-profile", "lineformer", "--num-gpus", "2", "--resume",
+        "--distributed-timeout-minutes", "180",
+    ]) == 0
+    assert launches[0][1]["timeout"] == timedelta(hours=3)
+    assert launches[0][0][1] == 2
+    assert "--resume" in parsed_commands[0]
+    recorded = json.loads((output / "training_profile.json").read_text())
+    assert recorded["distributed_timeout_minutes"] == 180
+    assert recorded["resume"] is True
 
 
 def test_profile_runtime_preserves_hooks_and_exempts_standalone_level_embedding(monkeypatch):

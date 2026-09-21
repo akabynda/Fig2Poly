@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 import json
 import math
 from pathlib import Path
@@ -473,6 +474,10 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--global-batch", type=int, help="Default: legacy=2, lineformer=4*num-gpus")
     parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument(
+        "--distributed-timeout-minutes", type=int, default=30,
+        help="Process-group communication timeout; raise for uneven full-validation workloads",
+    )
     parser.add_argument("--seed", type=int, help="LineFormer profile defaults to 20260905")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--image-size", type=int, help="Default: legacy=1024, lineformer=512")
@@ -531,7 +536,7 @@ def parse_args(argv: list[str] | None = None):
     args = parser.parse_args(argv)
     if args.disable_evaluation and args.early_stopping_patience:
         parser.error("--disable-evaluation is incompatible with early stopping")
-    for name in ("num_gpus", "global_batch", "image_size", "epochs", "max_iter", "checkpoint_period", "log_interval", "base_lr"):
+    for name in ("num_gpus", "distributed_timeout_minutes", "global_batch", "image_size", "epochs", "max_iter", "checkpoint_period", "log_interval", "base_lr"):
         value = getattr(args, name)
         if value is not None and value <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
@@ -599,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
         "evaluation_enabled": not args.disable_evaluation,
         "amp": args.amp,
         "resume": args.resume,
+        "distributed_timeout_minutes": args.distributed_timeout_minutes,
         "curve_loss_weight": args.curve_loss_weight,
         "curve_metrics": args.curve_metrics,
         "curve_score_threshold": args.curve_score_threshold,
@@ -617,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
         num_machines=1,
         machine_rank=0,
         dist_url=upstream_args.dist_url,
+        timeout=timedelta(minutes=args.distributed_timeout_minutes),
         args=(
             upstream_args,
             str(dataset),

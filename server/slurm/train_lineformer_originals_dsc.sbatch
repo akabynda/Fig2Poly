@@ -47,7 +47,8 @@ else
   command=("$PY" -m training.train_maskdino
     --maskdino-root "$MASKDINO_ROOT" --dataset "$DATASET" --output "$OUTPUT"
     --variant r50 --weights "$CACHE_ROOT/weights/R-50_imagenet.pkl"
-    --training-profile lineformer --num-gpus 2 --global-batch 8 --workers 8)
+    --training-profile lineformer --num-gpus 2 --global-batch 8 --workers 8
+    --distributed-timeout-minutes "${MASKDINO_DISTRIBUTED_TIMEOUT_MINUTES:-180}")
   [[ -f "$OUTPUT/last_checkpoint" ]] && command+=(--resume)
 fi
 record_run_metadata "$OUTPUT"
