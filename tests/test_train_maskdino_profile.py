@@ -1,5 +1,6 @@
 import ast
 from datetime import timedelta
+from contextlib import contextmanager
 import json
 import sys
 from pathlib import Path
@@ -267,3 +268,64 @@ def test_best_checkpoint_survives_resume_and_does_not_redirect_latest(monkeypatc
     assert len(saves) == 2
     assert restored.state_dict() == {"best_score": 43.0, "best_iteration": 999}
     assert (tmp_path / "last_checkpoint").read_text() == "model_0000499.pth"
+
+
+@pytest.mark.parametrize("main_rank", [True, False])
+def test_interrupted_validation_is_recovered_before_training_and_recorded_at_checkpoint_iteration(
+    monkeypatch, tmp_path, main_rank,
+):
+    from training.train_maskdino import recover_interrupted_validation
+
+    events = []
+    trainer = SimpleNamespace(
+        start_iter=53500, max_iter=100000,
+        cfg=SimpleNamespace(OUTPUT_DIR=str(tmp_path), TEST=SimpleNamespace(EVAL_PERIOD=250),
+                            DATASETS=SimpleNamespace(TEST=("val",))),
+    )
+
+    @contextmanager
+    def storage(iteration):
+        values = {}
+        yield SimpleNamespace(iter=iteration, latest=lambda: values)
+
+    class Evaluation:
+        def _do_eval(self):
+            events.append("evaluation")
+            if main_rank:
+                trainer.storage.latest()["segm/AP"] = (3.1, trainer.storage.iter)
+
+    class Best:
+        def before_train(self):
+            events.append("restore_best")
+
+        def save_if_improved(self):
+            events.append(("select_best", trainer.storage.latest()["segm/AP"]))
+
+    trainer._hooks = [Evaluation(), Best()] if main_rank else [Evaluation()]
+    monkeypatch.setitem(sys.modules, "detectron2.engine", SimpleNamespace(
+        hooks=SimpleNamespace(EvalHook=Evaluation)))
+    monkeypatch.setitem(sys.modules, "detectron2.utils", SimpleNamespace(comm=SimpleNamespace(
+        is_main_process=lambda: main_rank, synchronize=lambda: events.append("barrier"))))
+    monkeypatch.setitem(sys.modules, "detectron2.utils.events", SimpleNamespace(EventStorage=storage))
+    assert recover_interrupted_validation(trainer) is True
+    if main_rank:
+        assert events == ["evaluation", "restore_best", ("select_best", (3.1, 53499)), "barrier"]
+        row = json.loads((tmp_path / "metrics.json").read_text())
+        assert row == {"segm/AP": 3.1, "iteration": 53499}
+        assert json.loads((tmp_path / "resume_validation_53500.json").read_text()) == row
+        assert recover_interrupted_validation(trainer) is False
+    else:
+        assert events == ["evaluation", "barrier"]
+        assert not (tmp_path / "metrics.json").exists()
+
+
+@pytest.mark.parametrize("start_iter", [0, 53501, 100000])
+def test_resume_validation_skips_non_boundaries_or_finished_training(tmp_path, start_iter):
+    from training.train_maskdino import recover_interrupted_validation
+
+    trainer = SimpleNamespace(
+        start_iter=start_iter, max_iter=100000,
+        cfg=SimpleNamespace(OUTPUT_DIR=str(tmp_path), TEST=SimpleNamespace(EVAL_PERIOD=250),
+                            DATASETS=SimpleNamespace(TEST=("val",))),
+    )
+    assert recover_interrupted_validation(trainer) is False

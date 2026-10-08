@@ -227,6 +227,52 @@ def profile_checkpoint_hooks(configured, trainer):
     return result
 
 
+def recover_interrupted_validation(trainer) -> bool:
+    """Evaluate a resumed periodic checkpoint if its scheduled metric was not written."""
+    completed = trainer.start_iter
+    period = trainer.cfg.TEST.EVAL_PERIOD
+    if not (completed > 0 and completed < trainer.max_iter and period > 0
+            and completed % period == 0 and trainer.cfg.DATASETS.TEST):
+        return False
+    output = Path(trainer.cfg.OUTPUT_DIR)
+    metrics = output / "metrics.json"
+    if metrics.is_file():
+        with metrics.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("iteration") == completed - 1 and "segm/AP" in row:
+                    return False
+
+    from detectron2.engine import hooks
+    from detectron2.utils import comm
+    from detectron2.utils.events import EventStorage
+
+    print(f"Recovering interrupted validation after {completed} updates", flush=True)
+    with EventStorage(completed - 1) as trainer.storage:
+        evaluations = [hook for hook in trainer._hooks if isinstance(hook, hooks.EvalHook)]
+        if len(evaluations) != 1:
+            raise RuntimeError("Resume validation requires exactly one evaluation hook")
+        evaluations[0]._do_eval()
+        if comm.is_main_process():
+            if "segm/AP" not in trainer.storage.latest():
+                raise RuntimeError("Resumed validation did not produce segm/AP")
+            for hook in trainer._hooks:
+                if hasattr(hook, "save_if_improved"):
+                    hook.before_train()
+                    hook.save_if_improved()
+            row = {key: value[0] for key, value in trainer.storage.latest().items()}
+            row["iteration"] = completed - 1
+            (output / f"resume_validation_{completed}.json").write_text(
+                json.dumps(row, indent=2) + "\n", encoding="utf-8")
+            with metrics.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+    comm.synchronize()
+    return True
+
+
 def install_training_profile(train_net, profile: str, log_interval: int | None) -> None:
     """Install runtime-only hooks in each distributed worker, leaving upstream intact."""
     if profile != "lineformer" and log_interval is None:
@@ -236,6 +282,11 @@ def install_training_profile(train_net, profile: str, log_interval: int | None) 
     upstream_trainer = train_net.Trainer
 
     class ProfileTrainer(upstream_trainer):
+        def train(self):
+            if profile == "lineformer":
+                recover_interrupted_validation(self)
+            return super().train()
+
         def build_hooks(self):
             configured = super().build_hooks()
             if profile == "lineformer":

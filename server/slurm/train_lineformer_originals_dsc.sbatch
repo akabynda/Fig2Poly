@@ -18,6 +18,12 @@ case "$variant" in mask2former|maskdino) ;; *) exit 2 ;; esac
 PROJECT_ROOT="/mnt/tank/scratch/$(id -un)/Fig2Poly"
 allocated_cuda_devices="${CUDA_VISIBLE_DEVICES:?Slurm CUDA allocation missing}"
 source "$PROJECT_ROOT/server/lib/common.sh"
+scontrol_binary="$(command -v scontrol || true)"
+if [[ -z "$scontrol_binary" ]]; then
+  scontrol_binary="$FIG2POLY_STORAGE/.tools/slurm-client/scontrol"
+fi
+[[ -x "$scontrol_binary" ]] || { echo "Slurm client unavailable for requeue: $scontrol_binary" >&2; exit 2; }
+"$scontrol_binary" ping
 export CUDA_VISIBLE_DEVICES="$allocated_cuda_devices"
 IFS=',' read -ra allocated_gpus <<< "$CUDA_VISIBLE_DEVICES"
 [[ ${#allocated_gpus[@]} -eq 2 ]] || { echo "Expected 2 Slurm GPUs" >&2; exit 2; }
@@ -61,7 +67,7 @@ requeue_on_timeout() {
     kill -TERM -- "-$trainer_pid" 2>/dev/null || true
     wait "$trainer_pid" || true
   fi
-  scontrol requeue "$SLURM_JOB_ID"
+  "$scontrol_binary" requeue "$SLURM_JOB_ID"
   exit 0
 }
 trap requeue_on_timeout USR1

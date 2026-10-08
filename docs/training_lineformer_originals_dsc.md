@@ -160,3 +160,15 @@ at 00:34 on 2026-09-21. This is an execution setting; the validation batch, data
 250-step interval, losses and training schedule are preserved. The resolved
 timeout is recorded in `training_profile.json`. Resume uses `last_checkpoint`
 and restores the optimizer, scheduler and training iteration from that file.
+
+On resume, a periodic checkpoint at an evaluation boundary is validated before
+further optimizer updates if `metrics.json` lacks `segm/AP` for that iteration.
+The recovered evaluation participates in best-checkpoint selection and is saved
+as `resume_validation_<completed_updates>.json`. A completed evaluation is not
+repeated. This preserves validation candidates when Slurm interrupts evaluation
+after the periodic checkpoint was saved.
+
+The server launcher checks its Slurm client at startup. If the compute node has
+no `scontrol` on PATH, it uses `$FIG2POLY_STORAGE/.tools/slurm-client/scontrol`,
+a copy of the cluster's own client. This avoids the missing-command failure at
+the 14-day allocation boundary; it does not alter the training schedule.
