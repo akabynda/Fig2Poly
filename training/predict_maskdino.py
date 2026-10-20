@@ -32,14 +32,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--variant", choices=CONFIGS, default="r50")
+    parser.add_argument("--config", type=Path, help="Saved training config; preserves architecture and test preprocessing")
     parser.add_argument("--threshold", type=float, default=0.25)
-    parser.add_argument("--image-size", type=int, default=768)
-    parser.add_argument("--max-size", type=int, default=2048)
+    parser.add_argument("--image-size", type=int)
+    parser.add_argument("--max-size", type=int)
     parser.add_argument("--alpha", type=float, default=0.48)
     args = parser.parse_args(argv)
 
     maskdino_root = args.maskdino_root.resolve()
-    config = maskdino_root / CONFIGS[args.variant]
+    config = args.config.resolve() if args.config else maskdino_root / CONFIGS[args.variant]
     sys.path.insert(0, str(maskdino_root))
 
     from detectron2.checkpoint import DetectionCheckpointer
@@ -56,8 +57,14 @@ def main(argv: list[str] | None = None) -> int:
     cfg.MODEL.WEIGHTS = str(args.weights.resolve())
     cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES = 1
     cfg.MODEL.MaskDINO.TEST.OBJECT_MASK_THRESHOLD = args.threshold
-    cfg.INPUT.MIN_SIZE_TEST = args.image_size
-    cfg.INPUT.MAX_SIZE_TEST = args.max_size
+    if args.image_size is not None:
+        cfg.INPUT.MIN_SIZE_TEST = args.image_size
+    elif not args.config:
+        cfg.INPUT.MIN_SIZE_TEST = 768
+    if args.max_size is not None:
+        cfg.INPUT.MAX_SIZE_TEST = args.max_size
+    elif not args.config:
+        cfg.INPUT.MAX_SIZE_TEST = 2048
     cfg.MODEL.DEVICE = "cuda"
     cfg.freeze()
 
@@ -75,6 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    (output / "inference_config.yaml").write_text(cfg.dump(), encoding="utf-8")
+    (output / "inference_request.json").write_text(json.dumps({
+        "config": str(config), "weights": cfg.MODEL.WEIGHTS,
+        "input": str(args.input.resolve()), "threshold": args.threshold,
+        "image_size": cfg.INPUT.MIN_SIZE_TEST, "max_size": cfg.INPUT.MAX_SIZE_TEST,
+        "input_format": cfg.INPUT.FORMAT,
+        "num_queries": cfg.MODEL.MaskDINO.NUM_OBJECT_QUERIES,
+        "mask_dilation": 0, "images": [path.name for path in image_paths],
+    }, indent=2), encoding="utf-8")
     summary: list[dict] = []
 
     for image_path in image_paths:
@@ -82,7 +98,8 @@ def main(argv: list[str] | None = None) -> int:
         if original is None:
             raise RuntimeError(f"Unable to read {image_path}")
         height, width = original.shape[:2]
-        resized = transform.get_transform(original).apply_image(original)
+        model_image = original[:, :, ::-1] if cfg.INPUT.FORMAT == "RGB" else original
+        resized = transform.get_transform(model_image).apply_image(model_image)
         tensor = torch.as_tensor(resized.astype("float32").transpose(2, 0, 1))
         with torch.inference_mode():
             prediction = model([{"image": tensor, "height": height, "width": width}])[0]
